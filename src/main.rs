@@ -1,22 +1,13 @@
 use anyhow::Result;
-use bitcoin::{
-    hashes::{sha256, Hash},
-    script::Builder,
-    secp256k1::{PublicKey, SecretKey, Secp256k1},
-    Address, Network, PrivateKey, ScriptBuf, Transaction, TxIn, TxOut, Witness,
-    OutPoint, Sequence, Txid, Amount,
-    absolute::LockTime, transaction::Version,
-};
-use bitcoincore_rpc::{Auth, Client, RpcApi};
+use bitcoin::{OutPoint, Txid};
 use clap::{Parser, Subcommand};
 use std::str::FromStr;
 
-mod vault;
+mod taproot_vault;
 mod rpc_client;
 mod ctv;
 
-use vault::VaultPlan;
-use rpc_client::MutinynetClient;
+use taproot_vault::TaprootVault;
 
 #[derive(Parser)]
 #[command(name = "doko")]
@@ -65,6 +56,12 @@ enum Commands {
         #[arg(short, long, default_value = "vault_plan.json")]
         vault_file: String,
     },
+    /// Debug vault script and address computation
+    DebugScript {
+        /// Vault plan file to load
+        #[arg(short, long, default_value = "vault_plan.json")]
+        vault_file: String,
+    },
 }
 
 #[tokio::main]
@@ -90,22 +87,25 @@ async fn main() -> Result<()> {
         Commands::Demo { vault_file } => {
             demo(&vault_file).await?;
         }
+        Commands::DebugScript { vault_file } => {
+            debug_script(&vault_file).await?;
+        }
     }
     
     Ok(())
 }
 
 async fn create_vault(amount: u64, delay: u32) -> Result<()> {
-    println!("Creating vault with {} sats, {} block delay", amount, delay);
+    println!("Creating Taproot vault with {} sats, {} block delay", amount, delay);
     
-    let vault_plan = VaultPlan::new(amount, delay)?;
-    let vault_address = vault_plan.get_vault_address()?;
+    let taproot_vault = TaprootVault::new(amount, delay)?;
+    let vault_address = taproot_vault.get_vault_address()?;
     
     println!("Vault address: {}", vault_address);
     println!("Send {} sats to this address to fund the vault", amount);
     
     // Save vault plan for later use
-    vault_plan.save_to_file("vault_plan.json")?;
+    taproot_vault.save_to_file("taproot_vault.json")?;
     
     Ok(())
 }
@@ -135,29 +135,39 @@ async fn to_hot(unvault_utxo: &str) -> Result<()> {
 }
 
 async fn demo(vault_file: &str) -> Result<()> {
-    println!("🏦 Doko Vault Demo - Milestone 1 (CTV-only vault)\n");
+    println!("🏦 Doko Taproot Vault Demo - Milestone 1 (CTV + Taproot)\n");
     
-    let vault_plan = VaultPlan::load_from_file(vault_file)?;
+    // Try to load taproot vault first, fallback to creating new one
+    let taproot_vault = if vault_file == "vault_plan.json" && std::path::Path::new("taproot_vault.json").exists() {
+        TaprootVault::load_from_file("taproot_vault.json")?
+    } else if std::path::Path::new(vault_file).exists() {
+        TaprootVault::load_from_file(vault_file)?
+    } else {
+        println!("No vault file found. Creating new Taproot vault...");
+        let vault = TaprootVault::new(10000, 10)?;
+        vault.save_to_file("taproot_vault.json")?;
+        vault
+    };
     
     println!("📋 Vault Configuration:");
-    println!("  Amount: {} sats ({} BTC)", vault_plan.amount, vault_plan.amount as f64 / 100_000_000.0);
-    println!("  CSV Delay: {} blocks", vault_plan.csv_delay);
-    println!("  Network: {:?}", vault_plan.network);
+    println!("  Amount: {} sats ({} BTC)", taproot_vault.amount, taproot_vault.amount as f64 / 100_000_000.0);
+    println!("  CSV Delay: {} blocks", taproot_vault.csv_delay);
+    println!("  Network: {:?}", taproot_vault.network);
     println!();
     
-    println!("🔐 Generated Keys:");
-    println!("  Hot Public Key:  {}", vault_plan.hot_pubkey);
-    println!("  Cold Public Key: {}", vault_plan.cold_pubkey);
-    println!("  Hot Address:     {}", vault_plan.get_hot_address()?);
-    println!("  Cold Address:    {}", vault_plan.get_cold_address()?);
+    println!("🔐 Generated Keys (X-only for Taproot):");
+    println!("  Vault Public Key: {}", taproot_vault.vault_pubkey);
+    println!("  Hot Public Key:   {}", taproot_vault.hot_pubkey);
+    println!("  Cold Public Key:  {}", taproot_vault.cold_pubkey);
+    println!("  Hot Address:      {}", taproot_vault.get_hot_address()?);
+    println!("  Cold Address:     {}", taproot_vault.get_cold_address()?);
     println!();
     
-    println!("🏛️  Vault Address: {}", vault_plan.get_vault_address()?);
+    println!("🏛️  Vault Address (Taproot): {}", taproot_vault.get_vault_address()?);
     println!();
     
-    println!("📜 Script Analysis:");
-    println!("  Vault Script (hex): {}", vault_plan.vault_script);
-    println!("  Unvault Script (hex): {}", vault_plan.unvault_script);
+    println!("📜 Taproot Script Analysis:");
+    println!("  Trigger Address:  {}", taproot_vault.get_trigger_address()?);
     println!();
     
     // STEP 1: Fund the vault
@@ -165,11 +175,11 @@ async fn demo(vault_file: &str) -> Result<()> {
     println!("│                          STEP 1: FUND VAULT                   │");
     println!("└────────────────────────────────────────────────────────────────┘");
     println!();
-    println!("💰 Send exactly {} sats to this vault address:", vault_plan.amount);
-    println!("   📍 {}", vault_plan.get_vault_address()?);
+    println!("💰 Send exactly {} sats to this vault address:", taproot_vault.amount);
+    println!("   📍 {}", taproot_vault.get_vault_address()?);
     println!();
     println!("You can fund this vault using:");
-    println!("• Bitcoin Core CLI: bitcoin-cli -signet sendtoaddress {} 0.0001", vault_plan.get_vault_address()?);
+    println!("• Bitcoin Core CLI: bitcoin-cli -signet sendtoaddress {} 0.0001", taproot_vault.get_vault_address()?);
     println!("• Any signet-compatible wallet");
     println!("• Signet faucet (if available)");
     println!();
@@ -211,7 +221,7 @@ async fn demo(vault_file: &str) -> Result<()> {
     println!("└────────────────────────────────────────────────────────────────┘");
     println!();
     println!("Select which vault scenario to demonstrate:");
-    println!("  1. 🔥 Normal Hot Withdrawal (wait {} blocks then withdraw)", vault_plan.csv_delay);
+    println!("  1. 🔥 Normal Hot Withdrawal (wait {} blocks then withdraw)", taproot_vault.csv_delay);
     println!("  2. ❄️  Emergency Cold Clawback (immediate recovery)");
     println!("  3. 📊 Show transaction details only");
     println!();
@@ -221,18 +231,16 @@ async fn demo(vault_file: &str) -> Result<()> {
     io::stdin().read_line(&mut choice)?;
     
     // Create actual UTXOs from user input
-    use bitcoin::{OutPoint, Txid};
-    use std::str::FromStr;
-    let vault_txid = Txid::from_str(txid)?;
+    let vault_txid = bitcoin::Txid::from_str(txid)?;
     let vault_utxo = OutPoint::new(vault_txid, vout);
     
     match choice.trim() {
-        "1" => demo_hot_withdrawal(&vault_plan, vault_utxo).await?,
-        "2" => demo_cold_clawback(&vault_plan, vault_utxo).await?,
-        "3" => demo_transaction_details(&vault_plan, vault_utxo).await?,
+        "1" => demo_taproot_hot_withdrawal(&taproot_vault, vault_utxo).await?,
+        "2" => demo_taproot_cold_clawback(&taproot_vault, vault_utxo).await?,
+        "3" => demo_taproot_transaction_details(&taproot_vault, vault_utxo).await?,
         _ => {
             println!("Invalid choice. Showing transaction details instead...");
-            demo_transaction_details(&vault_plan, vault_utxo).await?;
+            demo_taproot_transaction_details(&taproot_vault, vault_utxo).await?;
         }
     }
     
@@ -244,7 +252,7 @@ async fn demo(vault_file: &str) -> Result<()> {
     Ok(())
 }
 
-async fn demo_hot_withdrawal(vault_plan: &VaultPlan, vault_utxo: OutPoint) -> Result<()> {
+async fn demo_taproot_hot_withdrawal(taproot_vault: &TaprootVault, vault_utxo: OutPoint) -> Result<()> {
     println!();
     println!("🔥 HOT WITHDRAWAL DEMO");
     println!("═══════════════════════");
@@ -254,17 +262,17 @@ async fn demo_hot_withdrawal(vault_plan: &VaultPlan, vault_utxo: OutPoint) -> Re
     println!("Step 1: Broadcasting Unvault Transaction");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     
-    let unvault_tx = vault_plan.create_unvault_tx(vault_utxo)?;
-    let unvault_hex = bitcoin::consensus::encode::serialize_hex(&unvault_tx);
+    let trigger_tx = taproot_vault.create_trigger_tx(vault_utxo)?;
+    let trigger_hex = bitcoin::consensus::encode::serialize_hex(&trigger_tx);
     
-    println!("📄 Unvault Transaction Details:");
-    println!("   TXID: {}", unvault_tx.txid());
+    println!("📄 Trigger Transaction Details:");
+    println!("   TXID: {}", trigger_tx.txid());
     println!("   Input: {}:{}", vault_utxo.txid, vault_utxo.vout);
-    println!("   Output: {} sats to unvault script", unvault_tx.output[0].value.to_sat());
-    println!("   Fee: {} sats", vault_plan.amount - unvault_tx.output[0].value.to_sat());
+    println!("   Output: {} sats to trigger script", trigger_tx.output[0].value.to_sat());
+    println!("   Fee: {} sats", taproot_vault.amount - trigger_tx.output[0].value.to_sat());
     println!();
     println!("📡 Raw Transaction (hex):");
-    println!("   {}", unvault_hex);
+    println!("   {}", trigger_hex);
     println!();
     
     print!("🚀 Broadcast this transaction? (y/n): ");
@@ -274,17 +282,17 @@ async fn demo_hot_withdrawal(vault_plan: &VaultPlan, vault_utxo: OutPoint) -> Re
     io::stdin().read_line(&mut input)?;
     
     if input.trim().eq_ignore_ascii_case("y") {
-        println!("💡 Broadcast using: bitcoin-cli -signet sendrawtransaction {}", unvault_hex);
+        println!("💡 Broadcast using: bitcoin-cli -signet sendrawtransaction {}", trigger_hex);
     }
     
     println!();
-    print!("✋ Unvault transaction broadcast? Enter the unvault TXID: ");
+    print!("✋ Trigger transaction broadcast? Enter the trigger TXID: ");
     io::stdout().flush()?;
-    let mut unvault_txid_input = String::new();
-    io::stdin().read_line(&mut unvault_txid_input)?;
+    let mut trigger_txid_input = String::new();
+    io::stdin().read_line(&mut trigger_txid_input)?;
     
-    let unvault_utxo = OutPoint::new(
-        bitcoin::Txid::from_str(unvault_txid_input.trim())?, 
+    let trigger_utxo = OutPoint::new(
+        bitcoin::Txid::from_str(trigger_txid_input.trim())?, 
         0
     );
     
@@ -292,16 +300,16 @@ async fn demo_hot_withdrawal(vault_plan: &VaultPlan, vault_utxo: OutPoint) -> Re
     println!();
     println!("Step 2: Waiting for CSV Delay");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("⏰ Must wait {} blocks before hot withdrawal is allowed", vault_plan.csv_delay);
+    println!("⏰ Must wait {} blocks before hot withdrawal is allowed", taproot_vault.csv_delay);
     println!("💡 You can track block height using: bitcoin-cli -signet getblockcount");
     println!();
-    print!("✋ Have {} blocks passed? (y/n): ", vault_plan.csv_delay);
+    print!("✋ Have {} blocks passed? (y/n): ", taproot_vault.csv_delay);
     io::stdout().flush()?;
     let mut wait_input = String::new();
     io::stdin().read_line(&mut wait_input)?;
     
     if !wait_input.trim().eq_ignore_ascii_case("y") {
-        println!("⏳ Come back after {} blocks have been mined!", vault_plan.csv_delay);
+        println!("⏳ Come back after {} blocks have been mined!", taproot_vault.csv_delay);
         return Ok(());
     }
     
@@ -310,15 +318,15 @@ async fn demo_hot_withdrawal(vault_plan: &VaultPlan, vault_utxo: OutPoint) -> Re
     println!("Step 3: Hot Withdrawal Transaction");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     
-    let tohot_tx = vault_plan.create_tohot_tx(unvault_utxo)?;
+    let tohot_tx = taproot_vault.create_hot_tx(trigger_utxo)?;
     let tohot_hex = bitcoin::consensus::encode::serialize_hex(&tohot_tx);
     
     println!("📄 Hot Withdrawal Transaction Details:");
     println!("   TXID: {}", tohot_tx.txid());
-    println!("   Input: {}:{} (sequence={})", unvault_utxo.txid, unvault_utxo.vout, vault_plan.csv_delay);
+    println!("   Input: {}:{} (sequence={})", trigger_utxo.txid, trigger_utxo.vout, taproot_vault.csv_delay);
     println!("   Output: {} sats to hot address", tohot_tx.output[0].value.to_sat());
-    println!("   Hot Address: {}", vault_plan.get_hot_address()?);
-    println!("   Fee: {} sats", unvault_tx.output[0].value.to_sat() - tohot_tx.output[0].value.to_sat());
+    println!("   Hot Address: {}", taproot_vault.get_hot_address()?);
+    println!("   Fee: {} sats", trigger_tx.output[0].value.to_sat() - tohot_tx.output[0].value.to_sat());
     println!();
     println!("📡 Raw Transaction (hex):");
     println!("   {}", tohot_hex);
@@ -330,7 +338,7 @@ async fn demo_hot_withdrawal(vault_plan: &VaultPlan, vault_utxo: OutPoint) -> Re
     Ok(())
 }
 
-async fn demo_cold_clawback(vault_plan: &VaultPlan, vault_utxo: OutPoint) -> Result<()> {
+async fn demo_taproot_cold_clawback(taproot_vault: &TaprootVault, vault_utxo: OutPoint) -> Result<()> {
     println!();
     println!("❄️ EMERGENCY COLD CLAWBACK DEMO");
     println!("═══════════════════════════════════");
@@ -341,25 +349,25 @@ async fn demo_cold_clawback(vault_plan: &VaultPlan, vault_utxo: OutPoint) -> Res
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!("⚠️  Simulating: Attacker initiates unvault");
     
-    let unvault_tx = vault_plan.create_unvault_tx(vault_utxo)?;
-    let unvault_hex = bitcoin::consensus::encode::serialize_hex(&unvault_tx);
+    let trigger_tx = taproot_vault.create_trigger_tx(vault_utxo)?;
+    let trigger_hex = bitcoin::consensus::encode::serialize_hex(&trigger_tx);
     
-    println!("📄 Unvault Transaction Details:");
-    println!("   TXID: {}", unvault_tx.txid());
+    println!("📄 Trigger Transaction Details:");
+    println!("   TXID: {}", trigger_tx.txid());
     println!("   Input: {}:{}", vault_utxo.txid, vault_utxo.vout);
-    println!("   Output: {} sats to unvault script", unvault_tx.output[0].value.to_sat());
+    println!("   Output: {} sats to trigger script", trigger_tx.output[0].value.to_sat());
     println!();
-    println!("🚀 Broadcast using: bitcoin-cli -signet sendrawtransaction {}", unvault_hex);
+    println!("🚀 Broadcast using: bitcoin-cli -signet sendrawtransaction {}", trigger_hex);
     println!();
     
-    print!("✋ Unvault transaction broadcast? Enter the unvault TXID: ");
+    print!("✋ Trigger transaction broadcast? Enter the trigger TXID: ");
     use std::io::{self, Write};
     io::stdout().flush()?;
-    let mut unvault_txid_input = String::new();
-    io::stdin().read_line(&mut unvault_txid_input)?;
+    let mut trigger_txid_input = String::new();
+    io::stdin().read_line(&mut trigger_txid_input)?;
     
-    let unvault_utxo = OutPoint::new(
-        bitcoin::Txid::from_str(unvault_txid_input.trim())?, 
+    let trigger_utxo = OutPoint::new(
+        bitcoin::Txid::from_str(trigger_txid_input.trim())?, 
         0
     );
     
@@ -370,16 +378,16 @@ async fn demo_cold_clawback(vault_plan: &VaultPlan, vault_utxo: OutPoint) -> Res
     println!("🚨 DETECTED UNAUTHORIZED UNVAULT!");
     println!("🏃‍♂️ Immediately sweeping to cold storage...");
     
-    let tocold_tx = vault_plan.create_tocold_tx(unvault_utxo)?;
+    let tocold_tx = taproot_vault.create_cold_tx(trigger_utxo)?;
     let tocold_hex = bitcoin::consensus::encode::serialize_hex(&tocold_tx);
     
     println!();
     println!("📄 Cold Clawback Transaction Details:");
     println!("   TXID: {}", tocold_tx.txid());
-    println!("   Input: {}:{}", unvault_utxo.txid, unvault_utxo.vout);
+    println!("   Input: {}:{}", trigger_utxo.txid, trigger_utxo.vout);
     println!("   Output: {} sats to cold address", tocold_tx.output[0].value.to_sat());
-    println!("   Cold Address: {}", vault_plan.get_cold_address()?);
-    println!("   Fee: {} sats", unvault_tx.output[0].value.to_sat() - tocold_tx.output[0].value.to_sat());
+    println!("   Cold Address: {}", taproot_vault.get_cold_address()?);
+    println!("   Fee: {} sats", trigger_tx.output[0].value.to_sat() - tocold_tx.output[0].value.to_sat());
     println!();
     println!("📡 Raw Transaction (hex):");
     println!("   {}", tocold_hex);
@@ -392,21 +400,21 @@ async fn demo_cold_clawback(vault_plan: &VaultPlan, vault_utxo: OutPoint) -> Res
     Ok(())
 }
 
-async fn demo_transaction_details(vault_plan: &VaultPlan, vault_utxo: OutPoint) -> Result<()> {
+async fn demo_taproot_transaction_details(taproot_vault: &TaprootVault, vault_utxo: OutPoint) -> Result<()> {
     println!();
     println!("📊 TRANSACTION DETAILS OVERVIEW");
     println!("═══════════════════════════════════");
     
-    let unvault_tx = vault_plan.create_unvault_tx(vault_utxo)?;
-    let unvault_utxo = OutPoint::new(unvault_tx.txid(), 0);
-    let tocold_tx = vault_plan.create_tocold_tx(unvault_utxo)?;
-    let tohot_tx = vault_plan.create_tohot_tx(unvault_utxo)?;
+    let trigger_tx = taproot_vault.create_trigger_tx(vault_utxo)?;
+    let trigger_utxo = OutPoint::new(trigger_tx.txid(), 0);
+    let tocold_tx = taproot_vault.create_cold_tx(trigger_utxo)?;
+    let tohot_tx = taproot_vault.create_hot_tx(trigger_utxo)?;
     
     println!();
-    println!("🚀 UNVAULT TRANSACTION");
+    println!("🚀 TRIGGER TRANSACTION");
     println!("━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("   TXID: {}", unvault_tx.txid());
-    println!("   Raw:  {}", bitcoin::consensus::encode::serialize_hex(&unvault_tx));
+    println!("   TXID: {}", trigger_tx.txid());
+    println!("   Raw:  {}", bitcoin::consensus::encode::serialize_hex(&trigger_tx));
     
     println!();
     println!("❄️ COLD CLAWBACK TRANSACTION");
@@ -422,6 +430,33 @@ async fn demo_transaction_details(vault_plan: &VaultPlan, vault_utxo: OutPoint) 
     
     println!();
     println!("💡 All transactions are deterministic and can be reconstructed anytime!");
+    
+    Ok(())
+}
+
+async fn debug_script(vault_file: &str) -> Result<()> {
+    println!("🔍 Debug Taproot Vault Script Computation\n");
+    
+    let taproot_vault = TaprootVault::load_from_file(vault_file)?;
+    
+    println!("📋 Taproot Vault:");
+    println!("  Hot Pubkey: {}", taproot_vault.hot_pubkey);
+    println!("  Cold Pubkey: {}", taproot_vault.cold_pubkey);
+    println!("  Amount: {}", taproot_vault.amount);
+    println!("  CSV Delay: {}", taproot_vault.csv_delay);
+    println!();
+    
+    println!("📜 Taproot Addresses:");
+    println!("  Vault Address: {}", taproot_vault.get_vault_address()?);
+    println!("  Trigger Address: {}", taproot_vault.get_trigger_address()?);
+    println!("  Hot Address: {}", taproot_vault.get_hot_address()?);
+    println!("  Cold Address: {}", taproot_vault.get_cold_address()?);
+    println!();
+    
+    println!("🏗️  Taproot Implementation:");
+    println!("  Uses NUMS point for internal key");
+    println!("  Script leaves: CTV deposit script, trigger script, cold cancel script");
+    println!("  Address format: P2TR (bech32m)");
     
     Ok(())
 }
