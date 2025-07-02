@@ -1,12 +1,12 @@
 {
-  "vault_privkey": "f5045687a61677fbbf91f6d13214f55602b8c689c51e8d81ea8fbb210344c5ab",
-  "hot_privkey": "f4c163797df683bc6ab7fdfeae3a435204e9c50e9e783a77f31c53382a939167",
-  "cold_privkey": "9dc0aed26ac7d7288f5adb3c5136bcc3ff532e0749203bedc22e76c62b8d33f6",
-  "vault_pubkey": "3f3633d2512fc138144bb66ca70638bb02b0f14bfbd44d55ba153577a5ee17a1",
-  "hot_pubkey": "6fa7cf591f27c5021f703a5a6658a14ec70d337f7dc8d4fdb86f65f8c5088014",
-  "cold_pubkey": "a8728e85c3ad54769c1d4d445916b83d93d07ea73caf20e0c8b9e915ffd01300",
-  "amount": 7000,
-  "csv_delay": 2,
+  "vault_privkey": "4f0dea410434a53855bd45a0fe6908c2c80935bdbff1d7f5065983db621aae83",
+  "hot_privkey": "38f8bd20323c140257179f3e0af58209931b6a2a73be6c0744a0fbf9007de8a6",
+  "cold_privkey": "2b503f170b6d33258106be8d0269e49c56b14cbe55304fd5959f45b6869db2dd",
+  "vault_pubkey": "d78a03bb3394c9c31d8fbf832657498d38d796b45ff39ad75dfff3ce5e1881eb",
+  "hot_pubkey": "00908310a27f95ca53479f22061e4da6fa2509a488c5803981838dd49614e0b7",
+  "cold_pubkey": "a103ca540f229f40803ab4c47337b5092c62f9f34d7c6b5e23d1c4167989fd56",
+  "amount": 5000,
+  "csv_delay": 4,
   "network": "signet",
   "current_outpoint": null
 }

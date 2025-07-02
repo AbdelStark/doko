@@ -14,13 +14,15 @@ use ratatui::{
     prelude::*,
     widgets::{
         block::*, List, ListItem, Paragraph, Tabs, Clear, 
-        Cell, Row, Table, Borders, Wrap,
+        Cell, Row, Table, Borders, Wrap, Gauge,
     },
 };
 use std::{
     io,
     time::{Duration, Instant},
+    fs,
 };
+use bitcoin::{OutPoint, Txid};
 
 use crate::{rpc_client::MutinynetClient, taproot_vault::TaprootVault};
 
@@ -49,16 +51,24 @@ pub struct App {
     pub popup_message: String,
     /// Auto-refresh enabled
     pub auto_refresh: bool,
+    /// Processing state for async operations
+    pub processing: bool,
+    /// Progress message for operations
+    pub progress_message: String,
+    /// Current vault funding UTXO
+    pub vault_utxo: Option<OutPoint>,
+    /// Current trigger UTXO
+    pub trigger_utxo: Option<OutPoint>,
 }
 
 /// Vault operational status
 #[derive(Debug, Clone)]
 pub enum VaultStatus {
     None,
-    Created { address: String },
-    Funded { utxo: String, amount: u64 },
-    Triggered { trigger_utxo: String, amount: u64 },
-    Completed { final_address: String, amount: u64 },
+    Created { address: String, amount: u64 },
+    Funded { utxo: String, amount: u64, confirmations: u32 },
+    Triggered { trigger_utxo: String, amount: u64, confirmations: u32, csv_blocks_remaining: Option<u32> },
+    Completed { final_address: String, amount: u64, tx_type: String },
 }
 
 /// Transaction information for display
@@ -77,18 +87,33 @@ impl App {
         let rpc = MutinynetClient::new()?;
         let block_height = rpc.get_block_count()?;
         
+        // Try to load existing vault from auto_vault.json
+        let vault = Self::load_vault_from_file().ok();
+        let vault_status = if vault.is_some() {
+            VaultStatus::Created { 
+                address: vault.as_ref().unwrap().get_vault_address().unwrap_or_default(),
+                amount: vault.as_ref().unwrap().amount,
+            }
+        } else {
+            VaultStatus::None
+        };
+        
         Ok(Self {
             current_tab: 0,
-            tabs: vec!["Dashboard", "Vault Control", "Transactions", "Settings"],
-            vault: None,
+            tabs: vec!["🏦 Dashboard", "⚙️ Controls", "📊 Transactions", "🔧 Settings"],
+            vault,
             rpc,
             block_height,
             last_update: Instant::now(),
             transactions: Vec::new(),
-            vault_status: VaultStatus::None,
+            vault_status,
             show_popup: false,
             popup_message: String::new(),
             auto_refresh: true,
+            processing: false,
+            progress_message: String::new(),
+            vault_utxo: None,
+            trigger_utxo: None,
         })
     }
     
@@ -104,19 +129,235 @@ impl App {
             }
         }
         
+        // Update vault status based on confirmations and CSV delay
+        self.update_vault_status().await?;
+        
+        Ok(())
+    }
+    
+    /// Update vault status based on current blockchain state
+    async fn update_vault_status(&mut self) -> Result<()> {
+        if let VaultStatus::Funded { utxo, amount, .. } = &self.vault_status {
+            // Check funding confirmations
+            let utxo_parts: Vec<&str> = utxo.split(':').collect();
+            if let Ok(txid) = utxo_parts[0].parse::<Txid>() {
+                let confirmations = self.rpc.get_confirmations(&txid).unwrap_or(0);
+                self.vault_status = VaultStatus::Funded {
+                    utxo: utxo.clone(),
+                    amount: *amount,
+                    confirmations,
+                };
+            }
+        } else if let VaultStatus::Triggered { trigger_utxo, amount, csv_blocks_remaining, .. } = &self.vault_status {
+            // Check trigger confirmations and CSV progress
+            let utxo_parts: Vec<&str> = trigger_utxo.split(':').collect();
+            if let Ok(txid) = utxo_parts[0].parse::<Txid>() {
+                let confirmations = self.rpc.get_confirmations(&txid).unwrap_or(0);
+                let remaining_blocks = if confirmations == 0 {
+                    csv_blocks_remaining.unwrap_or(0)
+                } else {
+                    csv_blocks_remaining.unwrap_or(0).saturating_sub(confirmations)
+                };
+                
+                self.vault_status = VaultStatus::Triggered {
+                    trigger_utxo: trigger_utxo.clone(),
+                    amount: *amount,
+                    confirmations,
+                    csv_blocks_remaining: Some(remaining_blocks),
+                };
+            }
+        }
+        Ok(())
+    }
+    
+    /// Load vault from auto_vault.json file
+    fn load_vault_from_file() -> Result<TaprootVault> {
+        let content = fs::read_to_string("auto_vault.json")?;
+        let vault: TaprootVault = serde_json::from_str(&content)?;
+        Ok(vault)
+    }
+    
+    /// Save vault to auto_vault.json file
+    fn save_vault_to_file(&self) -> Result<()> {
+        if let Some(ref vault) = self.vault {
+            let content = serde_json::to_string_pretty(vault)?;
+            fs::write("auto_vault.json", content)?;
+        }
         Ok(())
     }
     
     /// Create a new vault
-    pub fn create_vault(&mut self, amount: u64, delay: u32) -> Result<()> {
+    pub async fn create_vault(&mut self, amount: u64, delay: u32) -> Result<()> {
+        self.processing = true;
+        self.progress_message = "Creating new vault...".to_string();
+        
         let vault = TaprootVault::new(amount, delay)?;
         let address = vault.get_vault_address()?;
         
         self.vault = Some(vault);
-        self.vault_status = VaultStatus::Created { address: address.clone() };
-        self.show_popup("Vault created successfully!".to_string());
+        self.vault_status = VaultStatus::Created { address: address.clone(), amount };
+        self.save_vault_to_file()?;
+        
+        self.processing = false;
+        self.progress_message.clear();
+        self.show_popup(format!("🎉 Vault created successfully!\nAddress: {}\nAmount: {} sats", address, amount));
         
         Ok(())
+    }
+    
+    /// Fund the vault programmatically via RPC
+    pub async fn fund_vault(&mut self) -> Result<()> {
+        if let Some(ref vault) = self.vault {
+            self.processing = true;
+            self.progress_message = "Funding vault via RPC...".to_string();
+            
+            let vault_address = vault.get_vault_address()?;
+            let amount_btc = vault.amount as f64 / 100_000_000.0;
+            
+            // Fund the vault address
+            let funding_txid = self.rpc.fund_address(&vault_address, amount_btc)?;
+            
+            // Wait a moment for the transaction to propagate
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            
+            // Find which output contains our vault funding
+            let tx_info = self.rpc.get_raw_transaction_verbose(&funding_txid)?;
+            let mut vault_vout = 0;
+            for (i, output) in tx_info["vout"].as_array().unwrap().iter().enumerate() {
+                if output["scriptPubKey"]["address"].as_str() == Some(&vault_address) {
+                    vault_vout = i as u32;
+                    break;
+                }
+            }
+            
+            let vault_utxo = OutPoint::new(funding_txid, vault_vout);
+            self.vault_utxo = Some(vault_utxo);
+            
+            self.vault_status = VaultStatus::Funded { 
+                utxo: format!("{}:{}", funding_txid, vault_vout),
+                amount: vault.amount,
+                confirmations: 0,
+            };
+            
+            self.add_transaction(
+                funding_txid.to_string(),
+                "Vault Funding".to_string(),
+                vault.amount,
+            );
+            
+            self.processing = false;
+            self.progress_message.clear();
+            self.show_popup(format!("💰 Vault funded successfully!\nTXID: {}\nWaiting for confirmations...", funding_txid));
+            
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("No vault created yet"))
+        }
+    }
+    
+    /// Trigger unvault process
+    pub async fn trigger_unvault(&mut self) -> Result<()> {
+        if let (Some(ref vault), Some(vault_utxo)) = (&self.vault, self.vault_utxo) {
+            self.processing = true;
+            self.progress_message = "Broadcasting trigger transaction...".to_string();
+            
+            let vault_amount = vault.amount;
+            let csv_delay = vault.csv_delay;
+            let trigger_tx = vault.create_trigger_tx(vault_utxo)?;
+            let trigger_txid = self.rpc.send_raw_transaction(&trigger_tx)?;
+            
+            let trigger_utxo = OutPoint::new(trigger_txid, 0);
+            self.trigger_utxo = Some(trigger_utxo);
+            
+            self.vault_status = VaultStatus::Triggered {
+                trigger_utxo: format!("{}:0", trigger_txid),
+                amount: vault_amount - 1000, // minus fee
+                confirmations: 0,
+                csv_blocks_remaining: Some(csv_delay),
+            };
+            
+            self.add_transaction(
+                trigger_txid.to_string(),
+                "Vault Trigger".to_string(),
+                vault_amount - 1000,
+            );
+            
+            self.processing = false;
+            self.progress_message.clear();
+            self.show_popup(format!("🚀 Vault triggered successfully!\nTXID: {}\nCSV delay: {} blocks", trigger_txid, csv_delay));
+            
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("Vault not funded yet"))
+        }
+    }
+    
+    /// Emergency clawback to cold wallet
+    pub async fn emergency_clawback(&mut self) -> Result<()> {
+        if let (Some(ref vault), Some(trigger_utxo)) = (&self.vault, self.trigger_utxo) {
+            self.processing = true;
+            self.progress_message = "Emergency clawback in progress...".to_string();
+            
+            let vault_amount = vault.amount;
+            let cold_tx = vault.create_cold_tx(trigger_utxo)?;
+            let cold_txid = self.rpc.send_raw_transaction(&cold_tx)?;
+            
+            let cold_address = vault.get_cold_address()?;
+            
+            self.vault_status = VaultStatus::Completed {
+                final_address: cold_address,
+                amount: vault_amount - 2000, // minus fees
+                tx_type: "Emergency Clawback".to_string(),
+            };
+            
+            self.add_transaction(
+                cold_txid.to_string(),
+                "Emergency Clawback".to_string(),
+                vault_amount - 2000,
+            );
+            
+            self.processing = false;
+            self.progress_message.clear();
+            self.show_popup(format!("❄️ Emergency clawback successful!\nFunds secured in cold wallet\nTXID: {}", cold_txid));
+            
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("Vault not triggered yet"))
+        }
+    }
+    
+    /// Complete hot withdrawal (after CSV delay)
+    pub async fn hot_withdrawal(&mut self) -> Result<()> {
+        if let (Some(ref vault), Some(trigger_utxo)) = (&self.vault, self.trigger_utxo) {
+            self.processing = true;
+            self.progress_message = "Processing hot withdrawal...".to_string();
+            
+            let vault_amount = vault.amount;
+            let hot_tx = vault.create_hot_tx(trigger_utxo)?;
+            let hot_txid = self.rpc.send_raw_transaction(&hot_tx)?;
+            
+            let hot_address = vault.get_hot_address()?;
+            
+            self.vault_status = VaultStatus::Completed {
+                final_address: hot_address,
+                amount: vault_amount - 2000, // minus fees
+                tx_type: "Hot Withdrawal".to_string(),
+            };
+            
+            self.add_transaction(
+                hot_txid.to_string(),
+                "Hot Withdrawal".to_string(),
+                vault_amount - 2000,
+            );
+            
+            self.processing = false;
+            self.progress_message.clear();
+            self.show_popup(format!("🔥 Hot withdrawal successful!\nFunds sent to hot wallet\nTXID: {}", hot_txid));
+            
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("Vault not triggered yet"))
+        }
     }
     
     /// Show a popup message
@@ -191,8 +432,37 @@ pub async fn run_tui() -> Result<()> {
                         }
                         KeyCode::Char('n') => {
                             // Create new vault (demo values)
-                            if let Err(e) = app.create_vault(100000, 10) {
+                            let create_future = app.create_vault(10000, 6);
+                            if let Err(e) = create_future.await {
                                 app.show_popup(format!("Failed to create vault: {}", e));
+                            }
+                        }
+                        KeyCode::Char('f') => {
+                            // Fund vault programmatically
+                            let fund_future = app.fund_vault();
+                            if let Err(e) = fund_future.await {
+                                app.show_popup(format!("Failed to fund vault: {}", e));
+                            }
+                        }
+                        KeyCode::Char('t') => {
+                            // Trigger unvault
+                            let trigger_future = app.trigger_unvault();
+                            if let Err(e) = trigger_future.await {
+                                app.show_popup(format!("Failed to trigger unvault: {}", e));
+                            }
+                        }
+                        KeyCode::Char('c') => {
+                            // Emergency clawback
+                            let clawback_future = app.emergency_clawback();
+                            if let Err(e) = clawback_future.await {
+                                app.show_popup(format!("Failed to perform clawback: {}", e));
+                            }
+                        }
+                        KeyCode::Char('h') => {
+                            // Hot withdrawal
+                            let hot_future = app.hot_withdrawal();
+                            if let Err(e) = hot_future.await {
+                                app.show_popup(format!("Failed to perform hot withdrawal: {}", e));
                             }
                         }
                         KeyCode::Esc | KeyCode::Enter => {
@@ -306,11 +576,42 @@ fn render_dashboard(f: &mut Frame, area: Rect, app: &App) {
 /// Render vault status panel
 fn render_vault_status(f: &mut Frame, area: Rect, app: &App) {
     let status_text = match &app.vault_status {
-        VaultStatus::None => "No vault created\nPress 'n' to create a new vault".to_string(),
-        VaultStatus::Created { address } => format!("✅ Vault Created\nAddress: {}", address),
-        VaultStatus::Funded { utxo, amount } => format!("💰 Vault Funded\nUTXO: {}\nAmount: {} sats", utxo, amount),
-        VaultStatus::Triggered { trigger_utxo, amount } => format!("🚀 Vault Triggered\nTrigger UTXO: {}\nAmount: {} sats", trigger_utxo, amount),
-        VaultStatus::Completed { final_address, amount } => format!("✅ Vault Completed\nFinal Address: {}\nAmount: {} sats", final_address, amount),
+        VaultStatus::None => "🏗️ No vault created\n\nPress 'n' to create a new vault\nPress 'r' to refresh and load existing vault".to_string(),
+        VaultStatus::Created { address, amount } => format!("✅ Vault Created\n\n📼 Address: {}\n💰 Amount: {} sats\n\n🎯 Next: Press 'f' to fund vault", 
+            &address[..20], amount),
+        VaultStatus::Funded { utxo, amount, confirmations } => {
+            let conf_status = if *confirmations == 0 {
+                "⏳ Pending confirmation".to_string()
+            } else {
+                format!("✅ {} confirmations", confirmations)
+            };
+            format!("💰 Vault Funded\n\n🔗 UTXO: {}\n💰 Amount: {} sats\n{}\n\n🎯 Next: Press 't' to trigger unvault", 
+                &utxo[..20], amount, conf_status)
+        },
+        VaultStatus::Triggered { trigger_utxo, amount, confirmations, csv_blocks_remaining } => {
+            let conf_status = if *confirmations == 0 {
+                "⏳ Pending confirmation".to_string()
+            } else {
+                format!("✅ {} confirmations", confirmations)
+            };
+            let csv_status = match csv_blocks_remaining {
+                Some(0) => "🔥 CSV delay complete - can withdraw to hot!".to_string(),
+                Some(n) => format!("⏰ {} blocks remaining for hot withdrawal", n),
+                None => "CSV delay unknown".to_string(),
+            };
+            format!("🚀 Vault Triggered\n\n🔗 Trigger UTXO: {}\n💰 Amount: {} sats\n{}\n{}\n\n🎯 Actions:\n  'c' - Emergency clawback (immediate)\n  'h' - Hot withdrawal (after delay)", 
+                &trigger_utxo[..20], amount, conf_status, csv_status)
+        },
+        VaultStatus::Completed { final_address, amount, tx_type } => format!("🎉 Vault Completed\n\n✅ Type: {}\n🏠 Address: {}\n💰 Amount: {} sats\n\n🎯 Vault lifecycle complete!", 
+            tx_type, &final_address[..20], amount),
+    };
+    
+    let status_color = match &app.vault_status {
+        VaultStatus::None => Color::Gray,
+        VaultStatus::Created { .. } => Color::Blue,
+        VaultStatus::Funded { .. } => Color::Green,
+        VaultStatus::Triggered { .. } => Color::Yellow,
+        VaultStatus::Completed { .. } => Color::Magenta,
     };
     
     let vault_status = Paragraph::new(status_text)
@@ -318,7 +619,7 @@ fn render_vault_status(f: &mut Frame, area: Rect, app: &App) {
             Block::default()
                 .borders(Borders::ALL)
                 .title("🏛️ Vault Status")
-                .title_style(Style::default().fg(Color::Green))
+                .title_style(Style::default().fg(status_color).bold())
         )
         .wrap(Wrap { trim: true })
         .style(Style::default().fg(Color::White));
@@ -362,27 +663,94 @@ fn render_recent_activity(f: &mut Frame, area: Rect, app: &App) {
 }
 
 /// Render vault control tab
-fn render_vault_control(f: &mut Frame, area: Rect, _app: &App) {
-    let help_text = "Vault Control Commands:\n\n\
-        'n' - Create New Vault\n\
-        'f' - Fund Vault (manual)\n\
-        't' - Trigger Unvault\n\
-        'c' - Cold Clawback\n\
-        'h' - Hot Withdrawal\n\
-        'r' - Refresh Data\n\n\
-        Use automated demo: cargo run -- auto-demo";
+fn render_vault_control(f: &mut Frame, area: Rect, app: &App) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(12), // Commands
+            Constraint::Min(0),     // Current operation status
+        ])
+        .split(area);
+    
+    // Command help panel
+    let help_text = "🎮 VAULT CONTROL COMMANDS\n\n\
+        🏗️  'n' - Create New Vault (10k sats, 6 blocks delay)\n\
+        💰 'f' - Fund Vault (programmatic via RPC)\n\
+        🚀 't' - Trigger Unvault Process\n\
+        ❄️  'c' - Emergency Cold Clawback\n\
+        🔥 'h' - Hot Withdrawal (after CSV delay)\n\
+        🔄 'r' - Refresh Blockchain Data\n\n\
+        💡 All operations use RPC integration - no manual steps!";
     
     let help = Paragraph::new(help_text)
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .title("⚙️ Vault Controls")
-                .title_style(Style::default().fg(Color::Yellow))
+                .title_style(Style::default().fg(Color::Yellow).bold())
         )
         .wrap(Wrap { trim: true })
         .style(Style::default().fg(Color::White));
     
-    f.render_widget(help, area);
+    f.render_widget(help, chunks[0]);
+    
+    // Current operation status
+    let operation_text = if app.processing {
+        format!("⚡ PROCESSING: {}\n\nPlease wait...", app.progress_message)
+    } else {
+        match &app.vault_status {
+            VaultStatus::None => "🎯 Ready to create a new vault\n\nPress 'n' to start".to_string(),
+            VaultStatus::Created { .. } => "🎯 Vault created and ready for funding\n\nPress 'f' to fund via RPC".to_string(),
+            VaultStatus::Funded { confirmations, .. } => {
+                if *confirmations == 0 {
+                    "🎯 Waiting for funding confirmation\n\nPress 't' when confirmed".to_string()
+                } else {
+                    "🎯 Vault funded and confirmed\n\nPress 't' to trigger unvault".to_string()
+                }
+            },
+            VaultStatus::Triggered { csv_blocks_remaining, .. } => {
+                match csv_blocks_remaining {
+                    Some(0) => "🎯 CSV delay complete\n\nPress 'h' for hot withdrawal or 'c' for clawback".to_string(),
+                    Some(n) => format!("🎯 Waiting for CSV delay\n\n{} blocks remaining\nPress 'c' for emergency clawback", n),
+                    None => "🎯 Vault triggered\n\nPress 'c' for clawback or 'h' for hot withdrawal".to_string(),
+                }
+            },
+            VaultStatus::Completed { .. } => "🎯 Vault cycle complete\n\nPress 'n' to create a new vault".to_string(),
+        }
+    };
+    
+    let operation_color = if app.processing { Color::Yellow } else { Color::Green };
+    
+    let operation = Paragraph::new(operation_text)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("📊 Current Operation")
+                .title_style(Style::default().fg(operation_color).bold())
+        )
+        .wrap(Wrap { trim: true })
+        .style(Style::default().fg(Color::White))
+        .alignment(Alignment::Center);
+    
+    f.render_widget(operation, chunks[1]);
+    
+    // Show progress bar if processing
+    if app.processing {
+        let progress_area = Rect {
+            x: chunks[1].x + 2,
+            y: chunks[1].y + chunks[1].height - 3,
+            width: chunks[1].width - 4,
+            height: 1,
+        };
+        
+        let progress = Gauge::default()
+            .block(Block::default().borders(Borders::NONE))
+            .gauge_style(Style::default().fg(Color::Yellow))
+            .percent(50) // Indeterminate progress
+            .label("Processing...");
+        
+        f.render_widget(progress, progress_area);
+    }
 }
 
 /// Render transactions tab
