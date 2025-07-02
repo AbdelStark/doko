@@ -21,13 +21,14 @@ use anyhow::{Result, anyhow};
 use bitcoin::{
     hashes::{sha256, Hash},
     script::Builder,
-    secp256k1::{PublicKey as Secp256k1PublicKey, SecretKey, Secp256k1, XOnlyPublicKey},
+    secp256k1::{PublicKey as Secp256k1PublicKey, SecretKey, Secp256k1, XOnlyPublicKey, Message, Keypair},
     Address, Network, ScriptBuf, Transaction, TxIn, TxOut, Witness,
-    OutPoint, Sequence, Amount,
+    OutPoint, Sequence, Amount, TapSighashType,
     opcodes::all::*,
     absolute::LockTime, transaction::Version,
-    taproot::{TaprootBuilder, LeafVersion},
+    taproot::{TaprootBuilder, LeafVersion, TapLeafHash},
     key::TweakedPublicKey,
+    sighash::{SighashCache, Prevouts},
 };
 use serde::{Serialize, Deserialize};
 use std::str::FromStr;
@@ -813,11 +814,37 @@ impl TaprootVault {
             .control_block(&(trigger_script.clone(), LeafVersion::TapScript))
             .ok_or_else(|| anyhow!("Failed to create control block"))?;
             
-        // For hot path, need to actually sign with hot key
-        // This is a placeholder - real implementation would sign
+        // Create proper Schnorr signature for hot path
+        let hot_secret = SecretKey::from_str(&self.hot_privkey)?;
+        let hot_keypair = Keypair::from_secret_key(&secp, &hot_secret);
+        
+        // Create sighash for Taproot script-path spending
+        let prevouts = vec![TxOut {
+            value: Amount::from_sat(self.amount - 1000), // trigger output amount
+            script_pubkey: Address::from_str(&self.get_trigger_address()?)?
+                .require_network(self.network)?
+                .script_pubkey(),
+        }];
+        
+        let leaf_hash = TapLeafHash::from_script(&trigger_script, LeafVersion::TapScript);
+        
+        let mut sighash_cache = SighashCache::new(&tx);
+        let sighash = sighash_cache
+            .taproot_script_spend_signature_hash(
+                0, // input index
+                &Prevouts::All(&prevouts),
+                leaf_hash,
+                TapSighashType::Default,
+            )?;
+        
+        // Sign the sighash with hot private key
+        let message = Message::from_digest_slice(&sighash[..])?;
+        let signature = secp.sign_schnorr(&message, &hot_keypair);
+        
+        // Create witness stack for hot path (IF branch)
         let mut witness = Witness::new();
-        witness.push(vec![0u8; 64]); // Placeholder signature
-        witness.push(vec![0x01]); // TRUE for IF branch
+        witness.push(signature.as_ref()); // Schnorr signature (64 bytes)
+        witness.push(vec![0x01]); // TRUE for IF branch  
         witness.push(trigger_script.to_bytes());
         witness.push(control_block.serialize());
         

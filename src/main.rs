@@ -1,7 +1,7 @@
 use anyhow::Result;
 use bitcoin::{OutPoint, Txid};
 use clap::{Parser, Subcommand};
-use std::{str::FromStr, env, time::Duration};
+use std::{env, str::FromStr, time::Duration};
 use tokio::time::sleep;
 
 mod ctv;
@@ -131,7 +131,11 @@ async fn main() -> Result<()> {
         Commands::FindVault { utxo: _ } => {
             println!("FindVault command not implemented yet");
         }
-        Commands::AutoDemo { amount, delay, scenario } => {
+        Commands::AutoDemo {
+            amount,
+            delay,
+            scenario,
+        } => {
             auto_demo(amount, delay, &scenario).await?;
         }
         Commands::Dashboard => {
@@ -687,14 +691,14 @@ async fn create_cold(trigger_utxo: &str) -> Result<()> {
 async fn auto_demo(amount: Option<u64>, delay: Option<u32>, scenario: &str) -> Result<()> {
     // Load environment variables
     dotenv::dotenv().ok();
-    
+
     let amount = amount.unwrap_or_else(|| {
         env::var("DEFAULT_AMOUNT")
             .unwrap_or_else(|_| "100000".to_string())
             .parse()
             .unwrap_or(100000)
     });
-    
+
     let delay = delay.unwrap_or_else(|| {
         env::var("DEFAULT_CSV_DELAY")
             .unwrap_or_else(|_| "10".to_string())
@@ -705,42 +709,46 @@ async fn auto_demo(amount: Option<u64>, delay: Option<u32>, scenario: &str) -> R
     println!("🏦 DOKO AUTOMATED VAULT DEMO");
     println!("═══════════════════════════════");
     println!();
-    
+
     // Initialize RPC client
     print!("🔌 Connecting to Mutinynet...");
     let rpc = MutinynetClient::new()?;
     println!(" ✅ Connected to wallet: {}", rpc.get_wallet_name());
-    
+
     // Check blockchain info
     let chain_info = rpc.get_blockchain_info()?;
     let block_count = rpc.get_block_count()?;
-    println!("📡 Network: {} | Block Height: {}", 
-        chain_info["chain"].as_str().unwrap_or("unknown"), 
+    println!(
+        "📡 Network: {} | Block Height: {}",
+        chain_info["chain"].as_str().unwrap_or("unknown"),
         block_count
     );
     println!();
 
     // STEP 1: Create and fund vault
     println!("┌─────────────────────────────────────────────────────────────┐");
-    println!("│                    STEP 1: CREATE & FUND VAULT            │");
+    println!("│                    STEP 1: CREATE & FUND VAULT              │");
     println!("└─────────────────────────────────────────────────────────────┘");
     println!();
-    
-    print!("🏗️  Creating Taproot vault ({} sats, {} block delay)...", amount, delay);
+
+    print!(
+        "🏗️  Creating Taproot vault ({} sats, {} block delay)...",
+        amount, delay
+    );
     let vault = TaprootVault::new(amount, delay)?;
     vault.save_to_file("auto_vault.json")?;
     println!(" ✅");
-    
+
     let vault_address = vault.get_vault_address()?;
     println!("📍 Vault Address: {}", vault_address);
     println!("🔐 Hot Address:   {}", vault.get_hot_address()?);
     println!("❄️  Cold Address:  {}", vault.get_cold_address()?);
     println!();
-    
+
     print!("💰 Funding vault with {} sats...", amount);
     let funding_txid = rpc.fund_address(&vault_address, amount as f64 / 100_000_000.0)?;
     println!(" ✅ TXID: {}", funding_txid);
-    
+
     // Wait for confirmation
     print!("⏳ Waiting for confirmation...");
     loop {
@@ -752,26 +760,26 @@ async fn auto_demo(amount: Option<u64>, delay: Option<u32>, scenario: &str) -> R
         print!(".");
         sleep(Duration::from_secs(2)).await;
     }
-    
+
     let vault_utxo = OutPoint::new(funding_txid, 0);
     println!("📦 Vault UTXO: {}:0", funding_txid);
     println!();
 
     // STEP 2: Trigger (Unvault)
     println!("┌─────────────────────────────────────────────────────────────┐");
-    println!("│                   STEP 2: TRIGGER UNVAULT                 │");
+    println!("│                   STEP 2: TRIGGER UNVAULT                   │");
     println!("└─────────────────────────────────────────────────────────────┘");
     println!();
-    
+
     print!("🚀 Creating trigger transaction...");
     let trigger_tx = vault.create_trigger_tx(vault_utxo)?;
     let trigger_hex = bitcoin::consensus::encode::serialize_hex(&trigger_tx);
     println!(" ✅ TXID: {}", trigger_tx.txid());
-    
+
     print!("📡 Broadcasting trigger transaction...");
     let trigger_txid = rpc.send_raw_transaction_hex(&trigger_hex)?;
     println!(" ✅ Broadcast successful");
-    
+
     // Wait for confirmation
     print!("⏳ Waiting for trigger confirmation...");
     loop {
@@ -783,7 +791,7 @@ async fn auto_demo(amount: Option<u64>, delay: Option<u32>, scenario: &str) -> R
         print!(".");
         sleep(Duration::from_secs(2)).await;
     }
-    
+
     let trigger_utxo = OutPoint::new(trigger_txid, 0);
     println!("📦 Trigger UTXO: {}:0", trigger_txid);
     println!("💸 Amount: {} sats", trigger_tx.output[0].value.to_sat());
@@ -799,7 +807,9 @@ async fn auto_demo(amount: Option<u64>, delay: Option<u32>, scenario: &str) -> R
             // Note: Can't do hot after cold since UTXO is spent
         }
         _ => {
-            return Err(anyhow::anyhow!("Invalid scenario. Use 'hot', 'cold', or 'both'"));
+            return Err(anyhow::anyhow!(
+                "Invalid scenario. Use 'hot', 'cold', or 'both'"
+            ));
         }
     }
 
@@ -816,29 +826,33 @@ async fn auto_demo(amount: Option<u64>, delay: Option<u32>, scenario: &str) -> R
     println!();
     println!("🔍 View transactions on explorer:");
     println!("   https://mempool.space/signet");
-    
+
     Ok(())
 }
 
-async fn execute_cold_clawback(rpc: &MutinynetClient, vault: &TaprootVault, trigger_utxo: OutPoint) -> Result<()> {
+async fn execute_cold_clawback(
+    rpc: &MutinynetClient,
+    vault: &TaprootVault,
+    trigger_utxo: OutPoint,
+) -> Result<()> {
     println!("┌─────────────────────────────────────────────────────────────┐");
-    println!("│                STEP 3: EMERGENCY COLD CLAWBACK            │");
+    println!("│                STEP 3: EMERGENCY COLD CLAWBACK              │");
     println!("└─────────────────────────────────────────────────────────────┘");
     println!();
-    
+
     println!("🚨 SIMULATING ATTACK DETECTION!");
     println!("🏃‍♂️ Executing immediate cold clawback...");
     println!();
-    
+
     print!("❄️  Creating cold clawback transaction...");
     let cold_tx = vault.create_cold_tx(trigger_utxo)?;
     let cold_hex = bitcoin::consensus::encode::serialize_hex(&cold_tx);
     println!(" ✅ TXID: {}", cold_tx.txid());
-    
+
     print!("📡 Broadcasting cold clawback...");
     let cold_txid = rpc.send_raw_transaction_hex(&cold_hex)?;
     println!(" ✅ Broadcast successful");
-    
+
     // Wait for confirmation
     print!("⏳ Waiting for cold clawback confirmation...");
     loop {
@@ -850,45 +864,55 @@ async fn execute_cold_clawback(rpc: &MutinynetClient, vault: &TaprootVault, trig
         print!(".");
         sleep(Duration::from_secs(2)).await;
     }
-    
+
     println!();
     println!("🛡️  FUNDS SECURED IN COLD STORAGE");
     println!("   💰 Amount: {} sats", cold_tx.output[0].value.to_sat());
     println!("   📍 Address: {}", vault.get_cold_address()?);
     println!("   ⚡ No delay required - immediate recovery!");
-    
+
     Ok(())
 }
 
-async fn execute_hot_withdrawal(rpc: &MutinynetClient, vault: &TaprootVault, trigger_utxo: OutPoint) -> Result<()> {
+async fn execute_hot_withdrawal(
+    rpc: &MutinynetClient,
+    vault: &TaprootVault,
+    trigger_utxo: OutPoint,
+) -> Result<()> {
     println!("┌─────────────────────────────────────────────────────────────┐");
-    println!("│                 STEP 3: HOT WITHDRAWAL                     │");
+    println!("│                 STEP 3: HOT WITHDRAWAL                      │");
     println!("└─────────────────────────────────────────────────────────────┘");
     println!();
-    
+
     println!("🔥 NORMAL WITHDRAWAL PROCESS");
     println!("⏰ CSV Delay: {} blocks", vault.csv_delay);
     println!();
-    
+
     // Check current block height
     let start_block = rpc.get_block_count()?;
     let target_block = start_block + vault.csv_delay as u64;
-    
+
     println!("📊 Block Status:");
     println!("   Current: {}", start_block);
     println!("   Target:  {} (+{} blocks)", target_block, vault.csv_delay);
     println!();
-    
+
     if vault.csv_delay > 5 {
-        println!("⏳ For demo purposes, skipping {} block wait...", vault.csv_delay);
-        println!("💡 In production, would wait for {} blocks (~{} minutes)", 
-            vault.csv_delay, vault.csv_delay / 6);
+        println!(
+            "⏳ For demo purposes, skipping {} block wait...",
+            vault.csv_delay
+        );
+        println!(
+            "💡 In production, would wait for {} blocks (~{} minutes)",
+            vault.csv_delay,
+            vault.csv_delay / 6
+        );
     } else {
         println!("⏳ Waiting for {} blocks...", vault.csv_delay);
         // For small delays, actually wait
         let mut current_block = start_block;
         while current_block < target_block {
-            sleep(Duration::from_secs(5)).await;
+            sleep(Duration::from_secs(15)).await;
             current_block = rpc.get_block_count()?;
             print!("📊 Block: {} / {} ", current_block, target_block);
             if current_block < target_block {
@@ -898,20 +922,33 @@ async fn execute_hot_withdrawal(rpc: &MutinynetClient, vault: &TaprootVault, tri
             }
         }
     }
-    
+
     print!("🔥 Creating hot withdrawal transaction...");
     let hot_tx = vault.create_hot_tx(trigger_utxo)?;
     let hot_hex = bitcoin::consensus::encode::serialize_hex(&hot_tx);
     println!(" ✅ TXID: {}", hot_tx.txid());
     
-    println!("⚠️  Note: Hot withdrawal requires proper signature implementation");
-    println!("📡 Transaction ready to broadcast: {}", hot_hex);
+    print!("📡 Broadcasting hot withdrawal transaction...");
+    let hot_txid = rpc.send_raw_transaction_hex(&hot_hex)?;
+    println!(" ✅ Broadcast successful");
     
-    // Note: We don't broadcast hot tx in demo because it needs proper signature
-    println!("🔥 HOT WITHDRAWAL READY");
+    // Wait for confirmation
+    print!("⏳ Waiting for hot withdrawal confirmation...");
+    loop {
+        let confirmations = rpc.get_confirmations(&hot_txid)?;
+        if confirmations > 0 {
+            println!(" ✅ {} confirmations", confirmations);
+            break;
+        }
+        print!(".");
+        sleep(Duration::from_secs(2)).await;
+    }
+    
+    println!();
+    println!("🔥 HOT WITHDRAWAL COMPLETED!");
     println!("   💰 Amount: {} sats", hot_tx.output[0].value.to_sat());
     println!("   📍 Address: {}", vault.get_hot_address()?);
-    println!("   🔐 Requires hot key signature");
-    
+    println!("   ✅ Funds successfully transferred to hot wallet");
+
     Ok(())
 }
