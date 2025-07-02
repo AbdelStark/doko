@@ -1,0 +1,37 @@
+[
+  {
+    "desc": "wpkh(cU292aVx51dvrSauVugWXP7pR1mV3PoNAmzuN6h8J2ZFD7SZdZJH)#vamsrcra",
+    "timestamp": "now",
+    "label": "specter_key_0",
+    "active": false,
+    "watchonly": false
+  },
+  {
+    "desc": "wpkh(cNSdax46HKCL4sMLRZEDsjyrWyntRtaoKamas7c5jMsrjP6LhKzu)#qz9ces4r",
+    "timestamp": "now",
+    "label": "specter_key_1",
+    "active": false,
+    "watchonly": false
+  },
+  {
+    "desc": "wpkh(cVhbFcMcFGxsRzhGWYpaJAmVxpXzzvnYZ1q5hJeC4jaWGgsvQkHf)#yeezjh9u",
+    "timestamp": "now",
+    "label": "specter_key_2",
+    "active": false,
+    "watchonly": false
+  },
+  {
+    "desc": "wpkh(cQWMKLz8hnaLe5gH4wVwFjRXo9UfXjkppp2cRtUWaXv1e72Ph1cY)#k7hp3ka7",
+    "timestamp": "now",
+    "label": "specter_key_3",
+    "active": false,
+    "watchonly": false
+  },
+  {
+    "desc": "wpkh(cTXZy4zTFUc4gqoiGvjKtw9eEfZ6nSL2DuKkLigWH1m1bWMK7gHd)#v2ryq5pe",
+    "timestamp": "now",
+    "label": "specter_key_4",
+    "active": false,
+    "watchonly": false
+  }
+]

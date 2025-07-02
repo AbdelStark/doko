@@ -13,12 +13,12 @@ This document summarizes the successful end-to-end demonstration of the Doko Tap
 
 ## Vault Configuration
 
-| Parameter | Value | Description |
-|-----------|-------|-------------|
-| **Amount** | 100,000 sats (0.001 BTC) | Total vault capacity |
-| **CSV Delay** | 144 blocks (~24 hours) | Hot withdrawal delay |
-| **Network** | Signet | Mutinynet CTV-enabled testnet |
-| **Address Type** | P2TR (Taproot) | bech32m format |
+| Parameter        | Value                    | Description                   |
+| ---------------- | ------------------------ | ----------------------------- |
+| **Amount**       | 100,000 sats (0.001 BTC) | Total vault capacity          |
+| **CSV Delay**    | 144 blocks (~24 hours)   | Hot withdrawal delay          |
+| **Network**      | Signet                   | Mutinynet CTV-enabled testnet |
+| **Address Type** | P2TR (Taproot)           | bech32m format                |
 
 ### Generated Keys (X-only for Taproot)
 
@@ -178,23 +178,23 @@ Witness: [OP_FALSE, <trigger_script>, <control_block>]
 
 ### 🛡️ Attack Scenario Results
 
-| Attack Vector | Result | Protection |
-|---------------|--------|------------|
-| **Hot Key Compromise** | ❌ BLOCKED | Attacker must wait 144 blocks, allowing cold clawback |
-| **Unauthorized Unvault** | ❌ BLOCKED | CTV enforces only valid transaction templates |
-| **Direct Vault Spend** | ❌ BLOCKED | Only trigger transaction template accepted |
-| **Cold Path Bypass** | ❌ BLOCKED | CTV enforces cold recovery transaction |
+| Attack Vector            | Result    | Protection                                            |
+| ------------------------ | --------- | ----------------------------------------------------- |
+| **Hot Key Compromise**   | ❌ BLOCKED | Attacker must wait 144 blocks, allowing cold clawback |
+| **Unauthorized Unvault** | ❌ BLOCKED | CTV enforces only valid transaction templates         |
+| **Direct Vault Spend**   | ❌ BLOCKED | Only trigger transaction template accepted            |
+| **Cold Path Bypass**     | ❌ BLOCKED | CTV enforces cold recovery transaction                |
 
 ---
 
 ## Performance Metrics
 
-| Metric | Value | Notes |
-|--------|-------|-------|
-| **Total Fees** | 2,333 sats | Across all 3 transactions |
-| **Recovery Time** | ~3 minutes | From attack detection to cold security |
-| **Block Confirmations** | 1 each | Fast Mutinynet block times (~30s) |
-| **Transaction Sizes** | 112-123 vbytes | Efficient Taproot witness sizes |
+| Metric                  | Value          | Notes                                  |
+| ----------------------- | -------------- | -------------------------------------- |
+| **Total Fees**          | 2,333 sats     | Across all 3 transactions              |
+| **Recovery Time**       | ~3 minutes     | From attack detection to cold security |
+| **Block Confirmations** | 1 each         | Fast Mutinynet block times (~30s)      |
+| **Transaction Sizes**   | 112-123 vbytes | Efficient Taproot witness sizes        |
 
 ---
 
@@ -202,9 +202,9 @@ Witness: [OP_FALSE, <trigger_script>, <control_block>]
 
 View all transactions on Signet explorers:
 
-- **Funding TX**: [365b8e86451fc539c74ad0f0a02b2589ed2b8fb9bad8008f5f31195ae02b9003](https://mempool.space/signet/tx/365b8e86451fc539c74ad0f0a02b2589ed2b8fb9bad8008f5f31195ae02b9003)
-- **Trigger TX**: [c778131a439cc54d5bd46e77fc4b6cd45890b80357b704e1f01a348db62fed3f](https://mempool.space/signet/tx/c778131a439cc54d5bd46e77fc4b6cd45890b80357b704e1f01a348db62fed3f)
-- **Cold Clawback TX**: [e360c352401e2e1aeb8a2498276d6cb4efca14e0a8bf401d0c5a9d923a0759ae](https://mempool.space/signet/tx/e360c352401e2e1aeb8a2498276d6cb4efca14e0a8bf401d0c5a9d923a0759ae)
+- **Funding TX**: [365b8e86451fc539c74ad0f0a02b2589ed2b8fb9bad8008f5f31195ae02b9003](https://mutinynet.com/tx/365b8e86451fc539c74ad0f0a02b2589ed2b8fb9bad8008f5f31195ae02b9003)
+- **Trigger TX**: [c778131a439cc54d5bd46e77fc4b6cd45890b80357b704e1f01a348db62fed3f](https://mutinynet.com/tx/c778131a439cc54d5bd46e77fc4b6cd45890b80357b704e1f01a348db62fed3f)
+- **Cold Clawback TX**: [e360c352401e2e1aeb8a2498276d6cb4efca14e0a8bf401d0c5a9d923a0759ae](https://mutinynet.com/tx/e360c352401e2e1aeb8a2498276d6cb4efca14e0a8bf401d0c5a9d923a0759ae)
 
 ---
 

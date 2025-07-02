@@ -1,0 +1,32 @@
+[
+  {
+    "path": "m/84'/1'/0'/0/0",
+    "privkey_wif": "cU292aVx51dvrSauVugWXP7pR1mV3PoNAmzuN6h8J2ZFD7SZdZJH",
+    "privkey_hex": "c01c45487c8c33ff0049ca80bb76d7b528421db8b7c4e087aeb0395d2c859a88",
+    "pubkey": "03944c9da4eab132eeed920cac6f7c84b89bb860c0fd0ae2be50ff94c6e4960b86"
+  },
+  {
+    "path": "m/84'/1'/0'/0/1",
+    "privkey_wif": "cNSdax46HKCL4sMLRZEDsjyrWyntRtaoKamas7c5jMsrjP6LhKzu",
+    "privkey_hex": "19af949ab8da416831de7836ac14fff5891cd822c7885852fec2dde9af4d1edb",
+    "pubkey": "028bcca6dc871555c19e153a122a00e981f5b551da5d2b5848f7a2208bb6cb27c6"
+  },
+  {
+    "path": "m/84'/1'/0'/0/2",
+    "privkey_wif": "cVhbFcMcFGxsRzhGWYpaJAmVxpXzzvnYZ1q5hJeC4jaWGgsvQkHf",
+    "privkey_hex": "f23e56977e6aa00f3bc6950657914c819165efb3ad0807e7d455ec71bce152f2",
+    "pubkey": "0348d3f51713057319c8a767496ebd07acd8600a8cf905e45353184943ec92b064"
+  },
+  {
+    "path": "m/84'/1'/0'/0/3",
+    "privkey_wif": "cQWMKLz8hnaLe5gH4wVwFjRXo9UfXjkppp2cRtUWaXv1e72Ph1cY",
+    "privkey_hex": "57462bcb00b4477e0def74949bc5fa7d1fca3a7f94b03202a59397462897aa53",
+    "pubkey": "0367ba1f82f0dbcbcda8b6552e5d342799b8e160df2cdace45629995fba1d8cbad"
+  },
+  {
+    "path": "m/84'/1'/0'/0/4",
+    "privkey_wif": "cTXZy4zTFUc4gqoiGvjKtw9eEfZ6nSL2DuKkLigWH1m1bWMK7gHd",
+    "privkey_hex": "b169b64a1490dcf49c9160b4fa537a255c83fb59bc4ba97b75bc1d7a6a5172a1",
+    "pubkey": "03cb36af9f914afc1a108263d730f0f470f4be96e0e4e7ed6b28915dd5140d3cec"
+  }
+]

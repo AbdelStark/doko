@@ -101,7 +101,7 @@ impl VaultPlan {
         let script = Builder::new()
             .push_opcode(OP_IF)
             .push_int(self.csv_delay as i64)
-            .push_opcode(OP_NOP) // Placeholder for CSV check
+            .push_opcode(OP_CSV) // CSV check
             .push_opcode(OP_DROP)
             .push_key(&hot_pubkey)
             .push_opcode(OP_CHECKSIG)
@@ -199,11 +199,11 @@ impl VaultPlan {
         unvault_tx.input[0].previous_output = vault_utxo;
         
         // Add witness to satisfy the vault script (P2WSH spending)
-        // For CTV-only vault: witness is empty (no signature needed) + vault script
+        // For P2WSH with CTV-only script: witness contains just the script
+        // OP_CTV doesn't consume any stack items, it just validates the transaction template
         let vault_script = ScriptBuf::from_hex(&self.vault_script)?;
         let witness_stack = vec![
-            Vec::new(), // Empty - no signature required for CTV
-            vault_script.to_bytes(), // The vault script itself
+            vault_script.to_bytes(), // Just the vault script for P2WSH validation
         ];
         
         unvault_tx.input[0].witness = Witness::from_slice(&witness_stack);
@@ -217,10 +217,10 @@ impl VaultPlan {
         tocold_tx.input[0].previous_output = unvault_utxo;
         
         // Add witness to satisfy the unvault script (P2WSH spending via ELSE branch)
-        // For cold path: OP_FALSE (to take ELSE branch) + unvault script
+        // For cold path: empty (OP_FALSE) to take ELSE branch + unvault script
         let unvault_script = ScriptBuf::from_hex(&self.unvault_script)?;
         let witness_stack = vec![
-            vec![0x00], // OP_FALSE to take the ELSE branch (cold path)
+            Vec::new(), // Empty vector = OP_FALSE to take the ELSE branch (cold path)
             unvault_script.to_bytes(), // The unvault script itself
         ];
         
