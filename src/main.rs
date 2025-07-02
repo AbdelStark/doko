@@ -598,8 +598,12 @@ async fn debug_script(vault_file: &str) -> Result<()> {
 async fn debug_tx(vault_utxo: &str) -> Result<()> {
     println!("🔍 Debug Transaction Construction\n");
 
-    // Load vault
-    let taproot_vault = TaprootVault::load_from_file("taproot_vault.json")?;
+    // Load vault from auto_vault.json if it exists, otherwise taproot_vault.json
+    let taproot_vault = if std::path::Path::new("auto_vault.json").exists() {
+        TaprootVault::load_from_file("auto_vault.json")?
+    } else {
+        TaprootVault::load_from_file("taproot_vault.json")?
+    };
 
     // Parse UTXO
     let parts: Vec<&str> = vault_utxo.split(':').collect();
@@ -761,8 +765,18 @@ async fn auto_demo(amount: Option<u64>, delay: Option<u32>, scenario: &str) -> R
         sleep(Duration::from_secs(2)).await;
     }
 
-    let vault_utxo = OutPoint::new(funding_txid, 0);
-    println!("📦 Vault UTXO: {}:0", funding_txid);
+    // Find which output contains our vault funding
+    let tx_info = rpc.get_raw_transaction_verbose(&funding_txid)?;
+    let mut vault_vout = 0;
+    for (i, output) in tx_info["vout"].as_array().unwrap().iter().enumerate() {
+        if output["scriptPubKey"]["address"].as_str() == Some(&vault_address) {
+            vault_vout = i as u32;
+            break;
+        }
+    }
+    
+    let vault_utxo = OutPoint::new(funding_txid, vault_vout);
+    println!("📦 Vault UTXO: {}:{}", funding_txid, vault_vout);
     println!();
 
     // STEP 2: Trigger (Unvault)
