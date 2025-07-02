@@ -1,10 +1,9 @@
 use anyhow::Result;
 use bitcoin::{
     hashes::{sha256, Hash},
-    Transaction, TxOut,
+    Transaction,
     consensus::Encodable,
 };
-use std::io::Cursor;
 
 /// Compute the CTV hash according to BIP-119
 /// This is a simplified implementation for our vault use case

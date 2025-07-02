@@ -1,5 +1,5 @@
 use anyhow::Result;
-use bitcoin::{OutPoint, Txid};
+use bitcoin::OutPoint;
 use clap::{Parser, Subcommand};
 use std::{env, str::FromStr, time::Duration};
 use tokio::time::sleep;

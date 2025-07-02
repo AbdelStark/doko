@@ -1,6 +1,6 @@
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use bitcoincore_rpc::{Auth, Client, RpcApi};
-use bitcoin::{Transaction, Txid, OutPoint, Address, Amount};
+use bitcoin::{Transaction, Txid, Address};
 use serde_json::Value;
 use std::{env, str::FromStr};
 
