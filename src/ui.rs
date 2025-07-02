@@ -7,6 +7,7 @@
 use anyhow::Result;
 use arboard::Clipboard;
 use bitcoin::{OutPoint, Txid};
+use chrono;
 use crossterm::{
     event::{
         self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseButton,
@@ -119,6 +120,10 @@ pub struct App {
     pub status_message: String,
     /// Status message timer
     pub status_timer: Option<Instant>,
+    /// Transcript log entries
+    pub transcript_log: Vec<String>,
+    /// Session start time for transcript
+    pub session_start: Instant,
 }
 
 /// Vault operational status
@@ -181,7 +186,7 @@ impl App {
         // Initialize clipboard
         let clipboard = Clipboard::new().ok();
 
-        Ok(Self {
+        let mut app = Self {
             current_tab: 0,
             tabs: vec![
                 "🏦 Dashboard",
@@ -208,7 +213,18 @@ impl App {
             clipboard,
             status_message: String::new(),
             status_timer: None,
-        })
+            transcript_log: Vec::new(),
+            session_start: Instant::now(),
+        };
+        
+        // Initialize transcript log
+        app.log_to_transcript("🔐 Doko Vault TUI Session Started".to_string());
+        app.log_to_transcript(format!("⛓️ Connected to Mutinynet at block height {}", block_height));
+        if app.vault.is_some() {
+            app.log_to_transcript("📁 Existing vault loaded from auto_vault.json".to_string());
+        }
+        
+        Ok(app)
     }
 
     /// Handle mouse clicks
@@ -337,6 +353,150 @@ impl App {
     pub fn add_clickable_area(&mut self, rect: Rect, action: ClickAction, data: String) {
         self.clickable_areas
             .push(ClickableArea { rect, action, data });
+    }
+
+    /// Add entry to transcript log
+    pub fn log_to_transcript(&mut self, message: String) {
+        let elapsed = self.session_start.elapsed();
+        let timestamp = format!("[{:02}:{:02}:{:02}]", 
+            elapsed.as_secs() / 3600,
+            (elapsed.as_secs() % 3600) / 60,
+            elapsed.as_secs() % 60
+        );
+        let log_entry = format!("{} {}", timestamp, message);
+        self.transcript_log.push(log_entry);
+    }
+
+    /// Generate transcript content and save to file
+    pub fn generate_transcript(&self) -> Result<String> {
+        let session_duration = self.session_start.elapsed();
+        let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S").to_string();
+        
+        // Create transcripts directory if it doesn't exist
+        let transcripts_dir = "transcripts";
+        fs::create_dir_all(transcripts_dir)?;
+        
+        let filename = format!("{}/doko_transcript_{}.txt", transcripts_dir, timestamp);
+        
+        let mut content = String::new();
+        content.push_str(&format!("┌─────────────────────────────────────────────────────────────────┐\n"));
+        content.push_str(&format!("│                     🔐 DOKO VAULT TRANSCRIPT 🔐                  │\n"));
+        content.push_str(&format!("└─────────────────────────────────────────────────────────────────┘\n\n"));
+        
+        content.push_str(&format!("📅 Session Date: {}\n", chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")));
+        content.push_str(&format!("⏱️  Session Duration: {:02}:{:02}:{:02}\n", 
+            session_duration.as_secs() / 3600,
+            (session_duration.as_secs() % 3600) / 60,
+            session_duration.as_secs() % 60
+        ));
+        content.push_str(&format!("🌐 Network: Mutinynet (Bitcoin Signet)\n"));
+        content.push_str(&format!("🏦 Vault Operations: {} logged actions\n\n", self.transcript_log.len()));
+        
+        content.push_str("═══════════════════════════════════════════════════════════════════\n");
+        content.push_str("                            📝 ACTION LOG                          \n");
+        content.push_str("═══════════════════════════════════════════════════════════════════\n\n");
+        
+        if self.transcript_log.is_empty() {
+            content.push_str("ℹ️  No actions were logged during this session.\n");
+        } else {
+            for entry in &self.transcript_log {
+                content.push_str(&format!("{}\n", entry));
+            }
+        }
+        
+        content.push_str("\n═══════════════════════════════════════════════════════════════════\n");
+        content.push_str("                         🏦 VAULT INFORMATION                       \n");
+        content.push_str("═══════════════════════════════════════════════════════════════════\n\n");
+        
+        // Add detailed vault information
+        if let Some(vault) = &self.vault {
+            content.push_str(&format!("💰 Vault Amount: {} sats\n", vault.amount));
+            content.push_str(&format!("⏰ CSV Delay: {} blocks\n", vault.csv_delay));
+            content.push_str(&format!("🌐 Network: {}\n", match vault.network {
+                bitcoin::Network::Bitcoin => "Bitcoin Mainnet",
+                bitcoin::Network::Testnet => "Bitcoin Testnet",
+                bitcoin::Network::Signet => "Bitcoin Signet (Mutinynet)",
+                bitcoin::Network::Regtest => "Bitcoin Regtest",
+                _ => "Unknown",
+            }));
+            
+            // Add vault addresses with explorer links
+            if let Ok(vault_addr) = vault.get_vault_address() {
+                content.push_str(&format!("📍 Vault Address: {}\n", vault_addr));
+                content.push_str(&format!("🔗 Vault Explorer: https://mutinynet.com/address/{}\n", vault_addr));
+            }
+            
+            if let Ok(hot_addr) = vault.get_hot_address() {
+                content.push_str(&format!("🔥 Hot Address: {}\n", hot_addr));
+                content.push_str(&format!("🔗 Hot Explorer: https://mutinynet.com/address/{}\n", hot_addr));
+            }
+            
+            if let Ok(cold_addr) = vault.get_cold_address() {
+                content.push_str(&format!("❄️ Cold Address: {}\n", cold_addr));
+                content.push_str(&format!("🔗 Cold Explorer: https://mutinynet.com/address/{}\n", cold_addr));
+            }
+            
+            content.push_str(&format!("🔑 Hot PubKey: {}\n", vault.hot_pubkey));
+            content.push_str(&format!("🔐 Cold PubKey: {}\n", vault.cold_pubkey));
+        }
+        
+        // Add vault status summary
+        match &self.vault_status {
+            VaultStatus::None => content.push_str("\n🏦 Vault Status: No vault created\n"),
+            VaultStatus::Created { amount, address } => {
+                content.push_str(&format!("\n🏦 Vault Status: Created ({} sats)\n", amount));
+                content.push_str(&format!("📍 Vault Address: {}\n", address));
+            },
+            VaultStatus::Funded { amount, confirmations, utxo } => {
+                content.push_str(&format!("\n🏦 Vault Status: Funded ({} sats, {} confirmations)\n", amount, confirmations));
+                content.push_str(&format!("💎 Funding UTXO: {}\n", utxo));
+            },
+            VaultStatus::Triggered { amount, confirmations, trigger_utxo, .. } => {
+                content.push_str(&format!("\n🏦 Vault Status: Triggered ({} sats, {} confirmations)\n", amount, confirmations));
+                content.push_str(&format!("🚀 Trigger UTXO: {}\n", trigger_utxo));
+            },
+            VaultStatus::Completed { amount, tx_type, final_address } => {
+                content.push_str(&format!("\n🏦 Vault Status: Completed - {} ({} sats)\n", tx_type, amount));
+                content.push_str(&format!("🏠 Final Address: {}\n", final_address));
+            },
+        }
+        
+        content.push_str("\n═══════════════════════════════════════════════════════════════════\n");
+        content.push_str("                         📊 TRANSACTION DETAILS                     \n");
+        content.push_str("═══════════════════════════════════════════════════════════════════\n\n");
+        
+        if self.transactions.is_empty() {
+            content.push_str("ℹ️  No transactions recorded during this session.\n");
+        } else {
+            for (i, tx) in self.transactions.iter().enumerate() {
+                content.push_str(&format!("{}. {} ({})\n", 
+                    i + 1, 
+                    tx.tx_type, 
+                    tx.amount
+                ));
+                content.push_str(&format!("   📋 TXID: {}\n", tx.txid));
+                content.push_str(&format!("   🔗 Explorer: https://mutinynet.com/tx/{}\n", tx.txid));
+                content.push_str(&format!("   ✅ Confirmations: {}\n\n", tx.confirmations));
+            }
+        }
+        
+        content.push_str("═══════════════════════════════════════════════════════════════════\n");
+        content.push_str("                         📈 SESSION SUMMARY                        \n");
+        content.push_str("═══════════════════════════════════════════════════════════════════\n\n");
+        
+        content.push_str(&format!("📊 Total Transactions: {}\n", self.transactions.len()));
+        content.push_str(&format!("⛓️  Final Block Height: {}\n", self.block_height));
+        content.push_str(&format!("🔧 Actions Logged: {}\n", self.transcript_log.len()));
+        
+        content.push_str("\n═══════════════════════════════════════════════════════════════════\n");
+        content.push_str("      🔐 End of Doko Vault Session - Stay Safe! 🔐\n");
+        content.push_str("═══════════════════════════════════════════════════════════════════\n");
+        
+        // Write to file
+        fs::write(&filename, &content)?;
+        
+        // Return content for later display
+        Ok(content)
     }
 
     /// Update blockchain data
@@ -573,13 +733,32 @@ impl App {
 
     /// Complete hot withdrawal (after CSV delay)
     pub async fn hot_withdrawal(&mut self) -> Result<()> {
-        // Check if CSV delay has passed
-        if let VaultStatus::Triggered { csv_blocks_remaining, .. } = &self.vault_status {
+        // Check if CSV delay has passed based on confirmations
+        if let VaultStatus::Triggered { 
+            csv_blocks_remaining, 
+            confirmations,
+            .. 
+        } = &self.vault_status {
+            
+            // Get the CSV delay from vault configuration
+            let csv_delay = self.vault.as_ref()
+                .map(|v| v.csv_delay)
+                .unwrap_or(0);
+            
+            // Validate that enough confirmations have passed
+            if *confirmations < csv_delay {
+                return Err(anyhow::anyhow!(
+                    "CSV delay not satisfied. Need {} confirmations, but trigger transaction only has {}.", 
+                    csv_delay, confirmations
+                ));
+            }
+            
+            // Double-check with csv_blocks_remaining calculation
             if let Some(remaining) = csv_blocks_remaining {
                 if *remaining > 0 {
                     return Err(anyhow::anyhow!(
-                        "CSV delay not complete yet. {} blocks remaining.", 
-                        remaining
+                        "CSV delay not complete yet. {} blocks remaining (trigger tx has {} confirmations, need {}).", 
+                        remaining, confirmations, csv_delay
                     ));
                 }
             }
@@ -646,7 +825,7 @@ impl App {
 }
 
 /// Run the TUI application
-pub async fn run_tui() -> Result<()> {
+pub async fn run_tui() -> Result<Option<String>> {
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -663,6 +842,7 @@ pub async fn run_tui() -> Result<()> {
     // Main event loop
     let mut last_tick = Instant::now();
     let tick_rate = Duration::from_secs(1);
+    let mut transcript_content: Option<String> = None;
 
     loop {
         // Render UI
@@ -700,40 +880,60 @@ pub async fn run_tui() -> Result<()> {
                             }
                             KeyCode::Char('n') => {
                                 // Create new vault (demo values)
+                                app.log_to_transcript("🏗️ Creating new vault (10000 sats, 6 blocks delay)...".to_string());
                                 let create_future = app.create_vault(10000, 6);
                                 if let Err(e) = create_future.await {
                                     app.show_popup(format!("Failed to create vault: {}", e));
+                                    app.log_to_transcript(format!("❌ Vault creation failed: {}", e));
+                                } else {
+                                    app.log_to_transcript("✅ Vault created successfully".to_string());
                                 }
                             }
                             KeyCode::Char('f') => {
                                 // Fund vault programmatically
+                                app.log_to_transcript("💰 Funding vault via RPC...".to_string());
                                 let fund_future = app.fund_vault();
                                 if let Err(e) = fund_future.await {
                                     app.show_popup(format!("Failed to fund vault: {}", e));
+                                    app.log_to_transcript(format!("❌ Vault funding failed: {}", e));
+                                } else {
+                                    app.log_to_transcript("✅ Vault funded successfully".to_string());
                                 }
                             }
                             KeyCode::Char('t') => {
                                 // Trigger unvault
+                                app.log_to_transcript("🚀 Triggering unvault process...".to_string());
                                 let trigger_future = app.trigger_unvault();
                                 if let Err(e) = trigger_future.await {
                                     app.show_popup(format!("Failed to trigger unvault: {}", e));
+                                    app.log_to_transcript(format!("❌ Unvault trigger failed: {}", e));
+                                } else {
+                                    app.log_to_transcript("✅ Unvault triggered successfully".to_string());
                                 }
                             }
                             KeyCode::Char('c') => {
                                 // Emergency clawback
+                                app.log_to_transcript("❄️ Performing emergency clawback...".to_string());
                                 let clawback_future = app.emergency_clawback();
                                 if let Err(e) = clawback_future.await {
                                     app.show_popup(format!("Failed to perform clawback: {}", e));
+                                    app.log_to_transcript(format!("❌ Emergency clawback failed: {}", e));
+                                } else {
+                                    app.log_to_transcript("✅ Emergency clawback completed successfully".to_string());
                                 }
                             }
                             KeyCode::Char('h') => {
                                 // Hot withdrawal
+                                app.log_to_transcript("🔥 Performing hot withdrawal...".to_string());
                                 let hot_future = app.hot_withdrawal();
                                 if let Err(e) = hot_future.await {
                                     app.show_popup(format!(
                                         "Failed to perform hot withdrawal: {}",
                                         e
                                     ));
+                                    app.log_to_transcript(format!("❌ Hot withdrawal failed: {}", e));
+                                } else {
+                                    app.log_to_transcript("✅ Hot withdrawal completed successfully".to_string());
                                 }
                             }
                             KeyCode::Char('v') => {
@@ -742,18 +942,32 @@ pub async fn run_tui() -> Result<()> {
                             }
                             KeyCode::Char('o') => {
                                 // Open last transaction in explorer
-                                if let Some(last_tx) = app.transactions.last() {
+                                if let Some(last_tx) = app.transactions.last().cloned() {
                                     let url = explorer::tx_url(&last_tx.txid);
                                     if webbrowser::open(&url).is_ok() {
                                         app.show_status_message(format!(
                                             "🌐 Opened last transaction: {}",
                                             explorer::format_txid_short(&last_tx.txid)
                                         ));
+                                        app.log_to_transcript(format!("🌐 Opened transaction {} in browser", 
+                                            explorer::format_txid_short(&last_tx.txid)));
                                     } else {
                                         app.show_status_message("❌ Failed to open browser".to_string());
                                     }
                                 } else {
                                     app.show_status_message("ℹ️ No transactions to open".to_string());
+                                }
+                            }
+                            KeyCode::Char('x') => {
+                                // Generate transcript and exit
+                                match app.generate_transcript() {
+                                    Ok(content) => {
+                                        transcript_content = Some(content);
+                                        break;
+                                    },
+                                    Err(e) => {
+                                        app.show_popup(format!("Failed to generate transcript: {}", e));
+                                    }
                                 }
                             }
                             KeyCode::Esc | KeyCode::Enter => {
@@ -790,7 +1004,7 @@ pub async fn run_tui() -> Result<()> {
     )?;
     terminal.show_cursor()?;
 
-    Ok(())
+    Ok(transcript_content)
 }
 
 /// Render the main UI
@@ -1072,6 +1286,7 @@ fn render_vault_control(f: &mut Frame, area: Rect, app: &App) {
         ❄️  'c' - Emergency Cold Clawback\n\
         🔥 'h' - Hot Withdrawal (after CSV delay)\n\
         🌐 'o' - Open Last Transaction in Explorer\n\
+        📝 'x' - Export Session Transcript & Exit\n\
         🔄 'r' - Refresh Blockchain Data\n\n\
         💡 All operations use RPC integration - no manual steps!";
 
@@ -1217,9 +1432,9 @@ fn render_transactions(f: &mut Frame, area: Rect, app: &App) {
 /// Render settings tab
 fn render_settings(f: &mut Frame, area: Rect, app: &App) {
     let wallet_info = format!(
-        "Connected Wallet: {}\nNetwork: signet\nRPC URL: {}\nAuto-refresh: {}",
+        "Connected Wallet: {}\nNetwork: signet\nRPC URL: {}****:****\nAuto-refresh: {}",
         app.rpc.get_wallet_name(),
-        "34.10.114.163:38332",
+        "34.10.114",
         if app.auto_refresh { "ON" } else { "OFF" }
     );
 
@@ -1262,9 +1477,9 @@ fn render_footer_with_status(f: &mut Frame, area: Rect, app: &App) {
 /// Render footer with help text
 fn render_footer(f: &mut Frame, area: Rect, app: &App) {
     let help_text = if app.current_tab == 1 {
-        "🎮 CONTROLS: 'n'=New | 'f'=Fund | 't'=Trigger | 'c'=Clawback | 'h'=Hot | 'o'=Open Last Tx | 'v'=Details | 'r'=Refresh | 'q'=Quit"
+        "🎮 CONTROLS: 'n'=New | 'f'=Fund | 't'=Trigger | 'c'=Clawback | 'h'=Hot | 'o'=Open Last Tx | 'v'=Details | 'x'=Transcript | 'r'=Refresh | 'q'=Quit"
     } else {
-        "🗂️ NAVIGATION: Tab/1-4=Switch tabs | 'o'=Open Last Tx | 'v'=Vault details | 'r'=Refresh | 'q'=Quit"
+        "🗂️ NAVIGATION: Tab/1-4=Switch tabs | 'o'=Open Last Tx | 'v'=Vault details | 'x'=Export Transcript | 'r'=Refresh | 'q'=Quit"
     };
 
     let footer = Paragraph::new(help_text)

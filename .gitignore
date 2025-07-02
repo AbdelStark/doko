@@ -141,3 +141,5 @@ vite.config.ts.timestamp-*
 CLAUDE.md
 .cursor
 target
+doko_transcript*
+transcripts/

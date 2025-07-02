@@ -139,7 +139,11 @@ async fn main() -> Result<()> {
             auto_demo(amount, delay, &scenario).await?;
         }
         Commands::Dashboard => {
-            ui::run_tui().await?;
+            if let Some(transcript_content) = ui::run_tui().await? {
+                // Display transcript content to console after TUI cleanup
+                println!("\n{}", transcript_content);
+                println!("📁 Transcript saved to ./transcripts/ directory");
+            }
         }
     }
 
