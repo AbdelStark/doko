@@ -197,6 +197,17 @@ impl VaultPlan {
     pub fn create_unvault_tx(&self, vault_utxo: OutPoint) -> Result<Transaction> {
         let mut unvault_tx = self.create_unvault_tx_template()?;
         unvault_tx.input[0].previous_output = vault_utxo;
+        
+        // Add witness to satisfy the vault script (P2WSH spending)
+        // For CTV-only vault: witness is empty (no signature needed) + vault script
+        let vault_script = ScriptBuf::from_hex(&self.vault_script)?;
+        let witness_stack = vec![
+            Vec::new(), // Empty - no signature required for CTV
+            vault_script.to_bytes(), // The vault script itself
+        ];
+        
+        unvault_tx.input[0].witness = Witness::from_slice(&witness_stack);
+        
         Ok(unvault_tx)
     }
     
@@ -204,6 +215,17 @@ impl VaultPlan {
     pub fn create_tocold_tx(&self, unvault_utxo: OutPoint) -> Result<Transaction> {
         let mut tocold_tx = self.create_tocold_tx_template()?;
         tocold_tx.input[0].previous_output = unvault_utxo;
+        
+        // Add witness to satisfy the unvault script (P2WSH spending via ELSE branch)
+        // For cold path: OP_FALSE (to take ELSE branch) + unvault script
+        let unvault_script = ScriptBuf::from_hex(&self.unvault_script)?;
+        let witness_stack = vec![
+            vec![0x00], // OP_FALSE to take the ELSE branch (cold path)
+            unvault_script.to_bytes(), // The unvault script itself
+        ];
+        
+        tocold_tx.input[0].witness = Witness::from_slice(&witness_stack);
+        
         Ok(tocold_tx)
     }
     
@@ -217,7 +239,7 @@ impl VaultPlan {
             script_pubkey: hot_address.script_pubkey(),
         };
         
-        let tx = Transaction {
+        let mut tx = Transaction {
             version: Version::TWO,
             lock_time: LockTime::ZERO,
             input: vec![TxIn {
@@ -228,6 +250,18 @@ impl VaultPlan {
             }],
             output: vec![hot_output],
         };
+        
+        // Add witness to satisfy the unvault script (P2WSH spending via IF branch)
+        // For hot path: we need a signature + OP_TRUE to take IF branch + unvault script
+        // Note: This is incomplete - would need actual signing in a real implementation
+        let unvault_script = ScriptBuf::from_hex(&self.unvault_script)?;
+        let witness_stack = vec![
+            vec![0x00; 64], // Placeholder signature (would need real signing)
+            vec![0x01], // OP_TRUE to take the IF branch (hot path)  
+            unvault_script.to_bytes(), // The unvault script itself
+        ];
+        
+        tx.input[0].witness = Witness::from_slice(&witness_stack);
         
         Ok(tx)
     }
