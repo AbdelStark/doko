@@ -160,49 +160,268 @@ async fn demo(vault_file: &str) -> Result<()> {
     println!("  Unvault Script (hex): {}", vault_plan.unvault_script);
     println!();
     
-    println!("🔄 Transaction Flow:");
-    println!("  1. Fund vault address with {} sats", vault_plan.amount);
-    println!("  2. Anyone can initiate unvault (broadcasts unvault tx)");
-    println!("  3. Two spending paths from unvault:");
-    println!("     - Hot Path: Wait {} blocks + hot key signature", vault_plan.csv_delay);
-    println!("     - Cold Path: Immediate CTV sweep to cold wallet");
+    // STEP 1: Fund the vault
+    println!("┌────────────────────────────────────────────────────────────────┐");
+    println!("│                          STEP 1: FUND VAULT                   │");
+    println!("└────────────────────────────────────────────────────────────────┘");
+    println!();
+    println!("💰 Send exactly {} sats to this vault address:", vault_plan.amount);
+    println!("   📍 {}", vault_plan.get_vault_address()?);
+    println!();
+    println!("You can fund this vault using:");
+    println!("• Bitcoin Core CLI: bitcoin-cli -signet sendtoaddress {} 0.0001", vault_plan.get_vault_address()?);
+    println!("• Any signet-compatible wallet");
+    println!("• Signet faucet (if available)");
     println!();
     
-    // Create dummy UTXO for demonstration
-    use bitcoin::OutPoint;
-    let dummy_vault_utxo = OutPoint::null();
-    let dummy_unvault_utxo = OutPoint::null();
+    // Wait for user confirmation
+    print!("✋ Have you sent the funds? (y/n): ");
+    use std::io::{self, Write};
+    io::stdout().flush()?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
     
-    println!("📄 Transaction Templates:");
+    if !input.trim().eq_ignore_ascii_case("y") {
+        println!("Demo stopped. Fund the vault and run again when ready.");
+        return Ok(());
+    }
+    
+    // Prompt for the funding UTXO
+    println!();
+    println!("🔍 Please provide the funding transaction details:");
+    print!("   Enter TXID: ");
+    io::stdout().flush()?;
+    let mut txid_input = String::new();
+    io::stdin().read_line(&mut txid_input)?;
+    let txid = txid_input.trim();
+    
+    print!("   Enter VOUT (usually 0): ");
+    io::stdout().flush()?;
+    let mut vout_input = String::new();
+    io::stdin().read_line(&mut vout_input)?;
+    let vout: u32 = vout_input.trim().parse().unwrap_or(0);
+    
+    println!();
+    println!("✅ Vault funded with UTXO: {}:{}", txid, vout);
+    
+    // STEP 2: Choose demo flow
+    println!();
+    println!("┌────────────────────────────────────────────────────────────────┐");
+    println!("│                     STEP 2: CHOOSE DEMO FLOW                  │");
+    println!("└────────────────────────────────────────────────────────────────┘");
+    println!();
+    println!("Select which vault scenario to demonstrate:");
+    println!("  1. 🔥 Normal Hot Withdrawal (wait {} blocks then withdraw)", vault_plan.csv_delay);
+    println!("  2. ❄️  Emergency Cold Clawback (immediate recovery)");
+    println!("  3. 📊 Show transaction details only");
+    println!();
+    print!("Choose option (1-3): ");
+    io::stdout().flush()?;
+    let mut choice = String::new();
+    io::stdin().read_line(&mut choice)?;
+    
+    // Create actual UTXOs from user input
+    use bitcoin::{OutPoint, Txid};
+    use std::str::FromStr;
+    let vault_txid = Txid::from_str(txid)?;
+    let vault_utxo = OutPoint::new(vault_txid, vout);
+    
+    match choice.trim() {
+        "1" => demo_hot_withdrawal(&vault_plan, vault_utxo).await?,
+        "2" => demo_cold_clawback(&vault_plan, vault_utxo).await?,
+        "3" => demo_transaction_details(&vault_plan, vault_utxo).await?,
+        _ => {
+            println!("Invalid choice. Showing transaction details instead...");
+            demo_transaction_details(&vault_plan, vault_utxo).await?;
+        }
+    }
+    
+    println!();
+    println!("🎉 Demo completed! Check the transaction status on a Signet explorer:");
+    println!("   https://mempool.space/signet");
+    println!("   https://blockstream.info/signet");
+    
+    Ok(())
+}
+
+async fn demo_hot_withdrawal(vault_plan: &VaultPlan, vault_utxo: OutPoint) -> Result<()> {
+    println!();
+    println!("🔥 HOT WITHDRAWAL DEMO");
+    println!("═══════════════════════");
+    
+    // Step 1: Create and broadcast unvault transaction
+    println!();
+    println!("Step 1: Broadcasting Unvault Transaction");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    
+    let unvault_tx = vault_plan.create_unvault_tx(vault_utxo)?;
+    let unvault_hex = bitcoin::consensus::encode::serialize_hex(&unvault_tx);
+    
+    println!("📄 Unvault Transaction Details:");
+    println!("   TXID: {}", unvault_tx.txid());
+    println!("   Input: {}:{}", vault_utxo.txid, vault_utxo.vout);
+    println!("   Output: {} sats to unvault script", unvault_tx.output[0].value.to_sat());
+    println!("   Fee: {} sats", vault_plan.amount - unvault_tx.output[0].value.to_sat());
+    println!();
+    println!("📡 Raw Transaction (hex):");
+    println!("   {}", unvault_hex);
     println!();
     
-    println!("🚀 Unvault Transaction:");
-    let unvault_tx = vault_plan.create_unvault_tx(dummy_vault_utxo)?;
-    println!("  Inputs: 1 (vault UTXO)");
-    println!("  Outputs: 1 (unvault UTXO with time-lock script)");
-    println!("  Output Amount: {} sats", unvault_tx.output[0].value.to_sat());
-    println!("  Fee: {} sats", vault_plan.amount - unvault_tx.output[0].value.to_sat());
+    print!("🚀 Broadcast this transaction? (y/n): ");
+    use std::io::{self, Write};
+    io::stdout().flush()?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    
+    if input.trim().eq_ignore_ascii_case("y") {
+        println!("💡 Broadcast using: bitcoin-cli -signet sendrawtransaction {}", unvault_hex);
+    }
+    
+    println!();
+    print!("✋ Unvault transaction broadcast? Enter the unvault TXID: ");
+    io::stdout().flush()?;
+    let mut unvault_txid_input = String::new();
+    io::stdin().read_line(&mut unvault_txid_input)?;
+    
+    let unvault_utxo = OutPoint::new(
+        bitcoin::Txid::from_str(unvault_txid_input.trim())?, 
+        0
+    );
+    
+    // Step 2: Wait for CSV delay
+    println!();
+    println!("Step 2: Waiting for CSV Delay");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!("⏰ Must wait {} blocks before hot withdrawal is allowed", vault_plan.csv_delay);
+    println!("💡 You can track block height using: bitcoin-cli -signet getblockcount");
+    println!();
+    print!("✋ Have {} blocks passed? (y/n): ", vault_plan.csv_delay);
+    io::stdout().flush()?;
+    let mut wait_input = String::new();
+    io::stdin().read_line(&mut wait_input)?;
+    
+    if !wait_input.trim().eq_ignore_ascii_case("y") {
+        println!("⏳ Come back after {} blocks have been mined!", vault_plan.csv_delay);
+        return Ok(());
+    }
+    
+    // Step 3: Create and broadcast hot withdrawal
+    println!();
+    println!("Step 3: Hot Withdrawal Transaction");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    
+    let tohot_tx = vault_plan.create_tohot_tx(unvault_utxo)?;
+    let tohot_hex = bitcoin::consensus::encode::serialize_hex(&tohot_tx);
+    
+    println!("📄 Hot Withdrawal Transaction Details:");
+    println!("   TXID: {}", tohot_tx.txid());
+    println!("   Input: {}:{} (sequence={})", unvault_utxo.txid, unvault_utxo.vout, vault_plan.csv_delay);
+    println!("   Output: {} sats to hot address", tohot_tx.output[0].value.to_sat());
+    println!("   Hot Address: {}", vault_plan.get_hot_address()?);
+    println!("   Fee: {} sats", unvault_tx.output[0].value.to_sat() - tohot_tx.output[0].value.to_sat());
+    println!();
+    println!("📡 Raw Transaction (hex):");
+    println!("   {}", tohot_hex);
+    println!();
+    println!("🚀 Broadcast using: bitcoin-cli -signet sendrawtransaction {}", tohot_hex);
+    println!();
+    println!("✅ Hot withdrawal complete! Funds are now in the hot wallet.");
+    
+    Ok(())
+}
+
+async fn demo_cold_clawback(vault_plan: &VaultPlan, vault_utxo: OutPoint) -> Result<()> {
+    println!();
+    println!("❄️ EMERGENCY COLD CLAWBACK DEMO");
+    println!("═══════════════════════════════════");
+    
+    // Step 1: Create and broadcast unvault transaction
+    println!();
+    println!("Step 1: Broadcasting Unvault Transaction");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!("⚠️  Simulating: Attacker initiates unvault");
+    
+    let unvault_tx = vault_plan.create_unvault_tx(vault_utxo)?;
+    let unvault_hex = bitcoin::consensus::encode::serialize_hex(&unvault_tx);
+    
+    println!("📄 Unvault Transaction Details:");
+    println!("   TXID: {}", unvault_tx.txid());
+    println!("   Input: {}:{}", vault_utxo.txid, vault_utxo.vout);
+    println!("   Output: {} sats to unvault script", unvault_tx.output[0].value.to_sat());
+    println!();
+    println!("🚀 Broadcast using: bitcoin-cli -signet sendrawtransaction {}", unvault_hex);
     println!();
     
-    println!("❄️  Cold Sweep Transaction:");
-    let tocold_tx = vault_plan.create_tocold_tx(dummy_unvault_utxo)?;
-    println!("  Inputs: 1 (unvault UTXO)");  
-    println!("  Outputs: 1 (cold wallet P2WPKH)");
-    println!("  Output Amount: {} sats", tocold_tx.output[0].value.to_sat());
-    println!("  Fee: {} sats", unvault_tx.output[0].value.to_sat() - tocold_tx.output[0].value.to_sat());
-    println!();
+    print!("✋ Unvault transaction broadcast? Enter the unvault TXID: ");
+    use std::io::{self, Write};
+    io::stdout().flush()?;
+    let mut unvault_txid_input = String::new();
+    io::stdin().read_line(&mut unvault_txid_input)?;
     
-    println!("🔥 Hot Withdrawal Transaction:");
-    let tohot_tx = vault_plan.create_tohot_tx(dummy_unvault_utxo)?;
-    println!("  Inputs: 1 (unvault UTXO with sequence = {})", vault_plan.csv_delay);
-    println!("  Outputs: 1 (hot wallet P2WPKH)");
-    println!("  Output Amount: {} sats", tohot_tx.output[0].value.to_sat());
-    println!("  Fee: {} sats", unvault_tx.output[0].value.to_sat() - tohot_tx.output[0].value.to_sat());
-    println!();
+    let unvault_utxo = OutPoint::new(
+        bitcoin::Txid::from_str(unvault_txid_input.trim())?, 
+        0
+    );
     
-    println!("✅ Vault successfully configured!");
-    println!("💡 To fund this vault, send {} sats to: {}", 
-             vault_plan.amount, vault_plan.get_vault_address()?);
+    // Step 2: Immediate cold clawback
+    println!();
+    println!("Step 2: Emergency Cold Clawback");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!("🚨 DETECTED UNAUTHORIZED UNVAULT!");
+    println!("🏃‍♂️ Immediately sweeping to cold storage...");
+    
+    let tocold_tx = vault_plan.create_tocold_tx(unvault_utxo)?;
+    let tocold_hex = bitcoin::consensus::encode::serialize_hex(&tocold_tx);
+    
+    println!();
+    println!("📄 Cold Clawback Transaction Details:");
+    println!("   TXID: {}", tocold_tx.txid());
+    println!("   Input: {}:{}", unvault_utxo.txid, unvault_utxo.vout);
+    println!("   Output: {} sats to cold address", tocold_tx.output[0].value.to_sat());
+    println!("   Cold Address: {}", vault_plan.get_cold_address()?);
+    println!("   Fee: {} sats", unvault_tx.output[0].value.to_sat() - tocold_tx.output[0].value.to_sat());
+    println!();
+    println!("📡 Raw Transaction (hex):");
+    println!("   {}", tocold_hex);
+    println!();
+    println!("🚀 Broadcast using: bitcoin-cli -signet sendrawtransaction {}", tocold_hex);
+    println!();
+    println!("✅ Emergency clawback complete! Funds are safe in cold storage.");
+    println!("⚡ No waiting period required - CTV allows immediate recovery!");
+    
+    Ok(())
+}
+
+async fn demo_transaction_details(vault_plan: &VaultPlan, vault_utxo: OutPoint) -> Result<()> {
+    println!();
+    println!("📊 TRANSACTION DETAILS OVERVIEW");
+    println!("═══════════════════════════════════");
+    
+    let unvault_tx = vault_plan.create_unvault_tx(vault_utxo)?;
+    let unvault_utxo = OutPoint::new(unvault_tx.txid(), 0);
+    let tocold_tx = vault_plan.create_tocold_tx(unvault_utxo)?;
+    let tohot_tx = vault_plan.create_tohot_tx(unvault_utxo)?;
+    
+    println!();
+    println!("🚀 UNVAULT TRANSACTION");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━");
+    println!("   TXID: {}", unvault_tx.txid());
+    println!("   Raw:  {}", bitcoin::consensus::encode::serialize_hex(&unvault_tx));
+    
+    println!();
+    println!("❄️ COLD CLAWBACK TRANSACTION");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!("   TXID: {}", tocold_tx.txid());
+    println!("   Raw:  {}", bitcoin::consensus::encode::serialize_hex(&tocold_tx));
+    
+    println!();
+    println!("🔥 HOT WITHDRAWAL TRANSACTION");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!("   TXID: {}", tohot_tx.txid());
+    println!("   Raw:  {}", bitcoin::consensus::encode::serialize_hex(&tohot_tx));
+    
+    println!();
+    println!("💡 All transactions are deterministic and can be reconstructed anytime!");
     
     Ok(())
 }
