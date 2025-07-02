@@ -1,21 +1,65 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use bitcoincore_rpc::{Auth, Client, RpcApi};
 use bitcoin::{Transaction, Txid, OutPoint, Address, Amount};
 use serde_json::Value;
+use std::{env, str::FromStr};
 
+#[derive(Debug)]
 pub struct MutinynetClient {
     client: Client,
+    wallet_name: String,
 }
 
 impl MutinynetClient {
     pub fn new() -> Result<Self> {
-        // Mutinynet credentials from CLAUDE.md
-        let rpc_url = "http://34.10.114.163:38332";
-        let auth = Auth::UserPass("catnet".to_string(), "stark".to_string());
+        // Load environment variables
+        dotenv::dotenv().ok();
         
-        let client = Client::new(rpc_url, auth)?;
+        let rpc_url = env::var("RPC_URL")
+            .unwrap_or_else(|_| "34.10.114.163".to_string());
+        let rpc_port = env::var("RPC_PORT")
+            .unwrap_or_else(|_| "38332".to_string());
+        let rpc_user = env::var("RPC_USER")
+            .unwrap_or_else(|_| "catnet".to_string());
+        let rpc_password = env::var("RPC_PASSWORD")
+            .unwrap_or_else(|_| "stark".to_string());
+        let wallet_name = env::var("RPC_WALLET")
+            .unwrap_or_else(|_| "doko_signing".to_string());
         
-        Ok(Self { client })
+        let auth = Auth::UserPass(rpc_user, rpc_password);
+        let url = format!("http://{}:{}/wallet/{}", rpc_url, rpc_port, wallet_name);
+        let client = Client::new(&url, auth)?;
+        
+        Ok(MutinynetClient { 
+            client,
+            wallet_name,
+        })
+    }
+    
+    pub fn get_wallet_name(&self) -> &str {
+        &self.wallet_name
+    }
+    
+    pub fn fund_address(&self, address: &str, amount_btc: f64) -> Result<Txid> {
+        let result = self.client.call::<String>("sendtoaddress", &[
+            address.into(),
+            amount_btc.into(),
+        ])?;
+        Ok(Txid::from_str(&result)?)
+    }
+    
+    pub fn send_raw_transaction_hex(&self, hex: &str) -> Result<Txid> {
+        let result = self.client.call::<String>("sendrawtransaction", &[hex.into()])?;
+        Ok(Txid::from_str(&result)?)
+    }
+    
+    pub fn get_confirmations(&self, txid: &Txid) -> Result<u32> {
+        match self.get_raw_transaction_verbose(txid) {
+            Ok(tx_info) => {
+                Ok(tx_info["confirmations"].as_u64().unwrap_or(0) as u32)
+            }
+            Err(_) => Ok(0), // Transaction not found means 0 confirmations
+        }
     }
     
     pub fn get_blockchain_info(&self) -> Result<Value> {

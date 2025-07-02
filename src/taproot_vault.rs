@@ -41,7 +41,7 @@ use rand::thread_rng;
 /// 3. **Destination Addresses**: Final hot and cold wallet addresses
 ///
 /// All private keys are stored as hex strings for serialization compatibility.
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct TaprootVault {
     /// Private key for vault operations (hex-encoded)
     /// Note: In production, this should be derived from secure seed

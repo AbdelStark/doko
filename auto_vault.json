@@ -1,0 +1,12 @@
+{
+  "vault_privkey": "f37c376ea2d747e54c4772b45f15df667301234e194273d6ef9c5c0466c06c24",
+  "hot_privkey": "c6345e84a6bd8299b03d95859b73384c5c7e7f6c6f8e631c39739db5dc4495ac",
+  "cold_privkey": "fc63d11fd98ebdc850878c66e57177be5aed5797c880b257c3fade60ed16c6ab",
+  "vault_pubkey": "cbde64a2811714f468b82161c09cedb007f98568c36d5f1317c094fc7989c630",
+  "hot_pubkey": "0cfe66e9b31fd8d1a9f95d0b781854f27607429567145327db3488950e9821b8",
+  "cold_pubkey": "0797fb460f1f750e7d0cc5370b267bab28ed4710ff3f595b7375bedbd244e528",
+  "amount": 50000,
+  "csv_delay": 2,
+  "network": "signet",
+  "current_outpoint": null
+}
