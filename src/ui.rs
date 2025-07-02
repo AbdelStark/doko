@@ -26,6 +26,39 @@ use bitcoin::{OutPoint, Txid};
 
 use crate::{rpc_client::MutinynetClient, taproot_vault::TaprootVault};
 
+/// Mutinynet block explorer utilities
+mod explorer {
+    /// Generate Mutinynet explorer URL for an address
+    pub fn address_url(address: &str) -> String {
+        format!("https://mutinynet.com/address/{}", address)
+    }
+    
+    /// Generate Mutinynet explorer URL for a transaction
+    pub fn tx_url(txid: &str) -> String {
+        format!("https://mutinynet.com/tx/{}", txid)
+    }
+    
+    /// Format address with explorer link hint
+    pub fn format_address_with_link(address: &str) -> String {
+        let short_addr = if address.len() > 20 {
+            format!("{}...{}", &address[..10], &address[address.len()-10..])
+        } else {
+            address.to_string()
+        };
+        format!("{} 🔗", short_addr)
+    }
+    
+    /// Format transaction ID with explorer link hint
+    pub fn format_txid_with_link(txid: &str) -> String {
+        let short_txid = if txid.len() > 16 {
+            format!("{}...{}", &txid[..8], &txid[txid.len()-8..])
+        } else {
+            txid.to_string()
+        };
+        format!("{} 🔗", short_txid)
+    }
+}
+
 /// Main application state for the TUI
 #[derive(Debug)]
 pub struct App {
@@ -59,6 +92,10 @@ pub struct App {
     pub vault_utxo: Option<OutPoint>,
     /// Current trigger UTXO
     pub trigger_utxo: Option<OutPoint>,
+    /// Selected vault info tab
+    pub vault_info_tab: usize,
+    /// Show vault details popup
+    pub show_vault_details: bool,
 }
 
 /// Vault operational status
@@ -114,6 +151,8 @@ impl App {
             progress_message: String::new(),
             vault_utxo: None,
             trigger_utxo: None,
+            vault_info_tab: 0,
+            show_vault_details: false,
         })
     }
     
@@ -370,6 +409,7 @@ impl App {
     pub fn hide_popup(&mut self) {
         self.show_popup = false;
         self.popup_message.clear();
+        self.show_vault_details = false;
     }
     
     /// Add transaction to history
@@ -465,6 +505,10 @@ pub async fn run_tui() -> Result<()> {
                                 app.show_popup(format!("Failed to perform hot withdrawal: {}", e));
                             }
                         }
+                        KeyCode::Char('v') => {
+                            // Toggle vault details popup
+                            app.show_vault_details = !app.show_vault_details;
+                        }
                         KeyCode::Esc | KeyCode::Enter => {
                             app.hide_popup();
                         }
@@ -521,9 +565,13 @@ fn render_ui(f: &mut Frame, app: &App) {
     // Render footer
     render_footer(f, chunks[2], app);
     
-    // Render popup if needed
+    // Render popups if needed
     if app.show_popup {
         render_popup(f, app);
+    }
+    
+    if app.show_vault_details {
+        render_vault_details_popup(f, app);
     }
 }
 
@@ -533,16 +581,19 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("🏦 Doko Vault Dashboard")
+                .title("🏦 Doko Vault Dashboard - Bitcoin CTV Vault Management")
+                .title_style(Style::default().fg(Color::Cyan).bold())
         )
         .style(Style::default().fg(Color::White))
-        .highlight_style(Style::default().fg(Color::Yellow).bold())
+        .highlight_style(Style::default().fg(Color::Yellow).bold().bg(Color::DarkGray))
         .select(app.current_tab);
     
     f.render_widget(tabs, area);
     
     // Add blockchain info in the top right
-    let info_text = format!("Block: {} | Last Update: {}s ago", 
+    let status_icon = if app.processing { "⚡" } else { "🟢" };
+    let info_text = format!("{} Block: {} | {}s ago | 🔗 mutinynet.com", 
+        status_icon,
         app.block_height, 
         app.last_update.elapsed().as_secs()
     );
@@ -554,39 +605,59 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
         height: 1,
     };
     
+    let info_color = if app.processing { Color::Yellow } else { Color::Green };
     let info = Paragraph::new(info_text)
-        .style(Style::default().fg(Color::Gray));
+        .style(Style::default().fg(info_color));
     f.render_widget(info, info_area);
 }
 
 /// Render dashboard tab
 fn render_dashboard(f: &mut Frame, area: Rect, app: &App) {
     let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage(60), // Main status and actions
+            Constraint::Percentage(40), // Activity and vault info
+        ])
         .split(area);
     
-    // Left panel - Vault Status
-    render_vault_status(f, chunks[0], app);
+    let main_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+        .split(chunks[0]);
     
-    // Right panel - Recent Activity
-    render_recent_activity(f, chunks[1], app);
+    let bottom_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(chunks[1]);
+    
+    // Top Left - Vault Status
+    render_vault_status(f, main_chunks[0], app);
+    
+    // Top Right - Quick Actions
+    render_quick_actions(f, main_chunks[1], app);
+    
+    // Bottom Left - Recent Activity  
+    render_recent_activity(f, bottom_chunks[0], app);
+    
+    // Bottom Right - Vault Information
+    render_vault_info_panel(f, bottom_chunks[1], app);
 }
 
 /// Render vault status panel
 fn render_vault_status(f: &mut Frame, area: Rect, app: &App) {
     let status_text = match &app.vault_status {
-        VaultStatus::None => "🏗️ No vault created\n\nPress 'n' to create a new vault\nPress 'r' to refresh and load existing vault".to_string(),
-        VaultStatus::Created { address, amount } => format!("✅ Vault Created\n\n📼 Address: {}\n💰 Amount: {} sats\n\n🎯 Next: Press 'f' to fund vault", 
-            &address[..20], amount),
+        VaultStatus::None => "🏗️ No vault created\n\nPress 'n' to create a new vault\nPress 'r' to refresh and load existing vault\nPress 'v' to view vault details".to_string(),
+        VaultStatus::Created { address, amount } => format!("✅ Vault Created\n\n📼 Address: {}\n💰 Amount: {} sats\n🔗 Explorer: mutinynet.com/address\n\n🎯 Next: Press 'f' to fund vault\nPress 'v' for vault details", 
+            explorer::format_address_with_link(address), amount),
         VaultStatus::Funded { utxo, amount, confirmations } => {
             let conf_status = if *confirmations == 0 {
                 "⏳ Pending confirmation".to_string()
             } else {
                 format!("✅ {} confirmations", confirmations)
             };
-            format!("💰 Vault Funded\n\n🔗 UTXO: {}\n💰 Amount: {} sats\n{}\n\n🎯 Next: Press 't' to trigger unvault", 
-                &utxo[..20], amount, conf_status)
+            format!("💰 Vault Funded\n\n🔗 UTXO: {}\n💰 Amount: {} sats\n{}\n🔗 Explorer: mutinynet.com/tx\n\n🎯 Next: Press 't' to trigger unvault\nPress 'v' for vault details", 
+                explorer::format_txid_with_link(utxo), amount, conf_status)
         },
         VaultStatus::Triggered { trigger_utxo, amount, confirmations, csv_blocks_remaining } => {
             let conf_status = if *confirmations == 0 {
@@ -599,11 +670,11 @@ fn render_vault_status(f: &mut Frame, area: Rect, app: &App) {
                 Some(n) => format!("⏰ {} blocks remaining for hot withdrawal", n),
                 None => "CSV delay unknown".to_string(),
             };
-            format!("🚀 Vault Triggered\n\n🔗 Trigger UTXO: {}\n💰 Amount: {} sats\n{}\n{}\n\n🎯 Actions:\n  'c' - Emergency clawback (immediate)\n  'h' - Hot withdrawal (after delay)", 
-                &trigger_utxo[..20], amount, conf_status, csv_status)
+            format!("🚀 Vault Triggered\n\n🔗 Trigger UTXO: {}\n💰 Amount: {} sats\n{}\n{}\n🔗 Explorer: mutinynet.com/tx\n\n🎯 Actions:\n  'c' - Emergency clawback (immediate)\n  'h' - Hot withdrawal (after delay)\n  'v' - View vault details", 
+                explorer::format_txid_with_link(trigger_utxo), amount, conf_status, csv_status)
         },
-        VaultStatus::Completed { final_address, amount, tx_type } => format!("🎉 Vault Completed\n\n✅ Type: {}\n🏠 Address: {}\n💰 Amount: {} sats\n\n🎯 Vault lifecycle complete!", 
-            tx_type, &final_address[..20], amount),
+        VaultStatus::Completed { final_address, amount, tx_type } => format!("🎉 Vault Completed\n\n✅ Type: {}\n🏠 Address: {}\n💰 Amount: {} sats\n🔗 Explorer: mutinynet.com/address\n\n🎯 Vault lifecycle complete!\nPress 'v' for vault details", 
+            tx_type, explorer::format_address_with_link(final_address), amount),
     };
     
     let status_color = match &app.vault_status {
@@ -627,6 +698,50 @@ fn render_vault_status(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(vault_status, area);
 }
 
+/// Render quick actions panel
+fn render_quick_actions(f: &mut Frame, area: Rect, app: &App) {
+    let actions_text = match &app.vault_status {
+        VaultStatus::None => "🚀 QUICK ACTIONS\n\n🏗️  'n' - Create New Vault\n📁 'r' - Load Existing Vault\n\nReady to start vault management!".to_string(),
+        VaultStatus::Created { .. } => "🚀 NEXT ACTIONS\n\n💰 'f' - Fund Vault (RPC)\n🔄 'r' - Refresh Status\n\nVault created and ready for funding!".to_string(),
+        VaultStatus::Funded { confirmations, .. } => {
+            if *confirmations == 0 {
+                "🚀 WAITING FOR CONFIRMATION\n\n🔄 'r' - Refresh Status\n⏳ Waiting for network confirmation...\n\nWill enable trigger when confirmed!".to_string()
+            } else {
+                "🚀 READY TO TRIGGER\n\n🚀 't' - Trigger Unvault\n🔄 'r' - Refresh Status\n\nVault funded and confirmed!".to_string()
+            }
+        },
+        VaultStatus::Triggered { csv_blocks_remaining, .. } => {
+            match csv_blocks_remaining {
+                Some(0) => "🚀 WITHDRAWAL READY\n\n🔥 'h' - Hot Withdrawal\n❄️  'c' - Cold Clawback\n\nCSV delay complete - choose your path!".to_string(),
+                Some(n) => format!("🚀 CSV DELAY ACTIVE\n\n❄️  'c' - Emergency Clawback\n⏰ {} blocks remaining\n\nWait for hot or emergency clawback!", n),
+                None => "🚀 VAULT TRIGGERED\n\n🔥 'h' - Hot Withdrawal\n❄️  'c' - Cold Clawback\n\nChoose your withdrawal path!".to_string(),
+            }
+        },
+        VaultStatus::Completed { .. } => "🚀 VAULT COMPLETE\n\n🏗️  'n' - Create New Vault\n📊 Check transaction history\n\nVault cycle completed successfully!".to_string(),
+    };
+    
+    let actions_color = match &app.vault_status {
+        VaultStatus::None => Color::Gray,
+        VaultStatus::Created { .. } => Color::Blue,
+        VaultStatus::Funded { .. } => Color::Green,
+        VaultStatus::Triggered { .. } => Color::Yellow,
+        VaultStatus::Completed { .. } => Color::Magenta,
+    };
+    
+    let actions = Paragraph::new(actions_text)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("🎯 Quick Actions")
+                .title_style(Style::default().fg(actions_color).bold())
+        )
+        .wrap(Wrap { trim: true })
+        .style(Style::default().fg(Color::White))
+        .alignment(Alignment::Left);
+    
+    f.render_widget(actions, area);
+}
+
 /// Render recent activity panel
 fn render_recent_activity(f: &mut Frame, area: Rect, app: &App) {
     let items: Vec<ListItem> = app.transactions
@@ -640,13 +755,19 @@ fn render_recent_activity(f: &mut Frame, area: Rect, app: &App) {
                 format!("✅ {} conf", tx.confirmations)
             };
             
+            let style = if tx.confirmations == 0 {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default().fg(Color::Green)
+            };
+            
             ListItem::new(format!(
-                "{} | {} | {} sats | {}",
+                "⏰ {} | 🔧 {} | 💰 {} sats | {} 🔗",
                 tx.timestamp,
                 tx.tx_type,
                 tx.amount,
                 confirmations_text
-            ))
+            )).style(style)
         })
         .collect();
     
@@ -654,8 +775,8 @@ fn render_recent_activity(f: &mut Frame, area: Rect, app: &App) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("📊 Recent Activity")
-                .title_style(Style::default().fg(Color::Blue))
+                .title(format!("📊 Recent Activity ({}) 🔗", app.transactions.len()))
+                .title_style(Style::default().fg(Color::Blue).bold())
         )
         .style(Style::default().fg(Color::White));
     
@@ -769,18 +890,24 @@ fn render_transactions(f: &mut Frame, area: Rect, app: &App) {
             };
             
             let short_txid = if tx.txid.len() > 16 {
-                format!("{}...{}", &tx.txid[..8], &tx.txid[tx.txid.len()-8..])
+                format!("{}...{} 🔗", &tx.txid[..8], &tx.txid[tx.txid.len()-8..])
             } else {
-                tx.txid.clone()
+                format!("{} 🔗", tx.txid.clone())
+            };
+            
+            let row_style = if tx.confirmations == 0 {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default().fg(Color::Green)
             };
             
             Row::new(vec![
                 Cell::from(tx.timestamp.clone()),
                 Cell::from(tx.tx_type.clone()),
-                Cell::from(tx.amount.to_string()),
+                Cell::from(format!("{} sats", tx.amount)),
                 Cell::from(conf_text),
                 Cell::from(short_txid),
-            ])
+            ]).style(row_style)
         })
         .collect();
     
@@ -795,8 +922,8 @@ fn render_transactions(f: &mut Frame, area: Rect, app: &App) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("📋 Transaction History")
-                .title_style(Style::default().fg(Color::Cyan))
+                .title(format!("📋 Transaction History ({}) 🔗", app.transactions.len()))
+                .title_style(Style::default().fg(Color::Cyan).bold())
         )
         .style(Style::default().fg(Color::White));
     
@@ -825,14 +952,19 @@ fn render_settings(f: &mut Frame, area: Rect, app: &App) {
 }
 
 /// Render footer with help text
-fn render_footer(f: &mut Frame, area: Rect, _app: &App) {
-    let help_text = "Press 'q' to quit | Tab/1-4: Switch tabs | 'r': Refresh | 'n': New vault | ESC: Close popup";
+fn render_footer(f: &mut Frame, area: Rect, app: &App) {
+    let help_text = if app.current_tab == 1 {
+        "🎮 CONTROLS: 'n'=New | 'f'=Fund | 't'=Trigger | 'c'=Clawback | 'h'=Hot | 'v'=Details | 'r'=Refresh | 'q'=Quit"
+    } else {
+        "🗂️ NAVIGATION: Tab/1-4=Switch tabs | 'v'=Vault details | 'r'=Refresh | 'q'=Quit | ESC=Close popup"
+    };
     
     let footer = Paragraph::new(help_text)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("Help")
+                .title("🆘 Help")
+                .title_style(Style::default().fg(Color::Cyan))
         )
         .style(Style::default().fg(Color::Gray))
         .alignment(Alignment::Center);
@@ -858,6 +990,164 @@ fn render_popup(f: &mut Frame, app: &App) {
         .style(Style::default().fg(Color::White).bg(Color::DarkGray));
     
     f.render_widget(popup, popup_area);
+}
+
+/// Render vault information panel
+fn render_vault_info_panel(f: &mut Frame, area: Rect, app: &App) {
+    let vault_info_text = if let Some(ref vault) = app.vault {
+        format!("🏛️ VAULT INFORMATION\n\n\
+            📊 Configuration:\n\
+            💰 Amount: {} sats\n\
+            ⏰ CSV Delay: {} blocks\n\
+            🌐 Network: Mutinynet (Signet)\n\n\
+            🔑 Addresses:\n\
+            🔥 Hot: {}\n\
+            ❄️  Cold: {}\n\n\
+            📋 Current State: {}\n\n\
+            💡 Press 'v' for detailed view",
+            vault.amount,
+            vault.csv_delay,
+            vault.get_hot_address().unwrap_or_else(|_| "Error loading".to_string())[..20].to_string() + "...",
+            vault.get_cold_address().unwrap_or_else(|_| "Error loading".to_string())[..20].to_string() + "...",
+            match &app.vault_status {
+                VaultStatus::None => "None",
+                VaultStatus::Created { .. } => "Created",
+                VaultStatus::Funded { .. } => "Funded",
+                VaultStatus::Triggered { .. } => "Triggered",
+                VaultStatus::Completed { .. } => "Completed",
+            }
+        )
+    } else {
+        "🏛️ VAULT INFORMATION\n\n\
+         📋 No vault created yet\n\n\
+         Create a vault to see:\n\
+         • Configuration details\n\
+         • Hot & Cold addresses\n\
+         • Explorer links\n\
+         • Transaction history\n\n\
+         💡 Press 'n' to create vault".to_string()
+    };
+    
+    let info_color = if app.vault.is_some() { Color::Cyan } else { Color::Gray };
+    
+    let vault_info = Paragraph::new(vault_info_text)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("🏛️ Vault Information")
+                .title_style(Style::default().fg(info_color).bold())
+        )
+        .wrap(Wrap { trim: true })
+        .style(Style::default().fg(Color::White));
+    
+    f.render_widget(vault_info, area);
+}
+
+/// Render comprehensive vault details popup
+fn render_vault_details_popup(f: &mut Frame, app: &App) {
+    let popup_area = centered_rect(80, 70, f.size());
+    
+    f.render_widget(Clear, popup_area);
+    
+    if let Some(ref vault) = app.vault {
+        let vault_address = vault.get_vault_address().unwrap_or_else(|_| "Error loading address".to_string());
+        let hot_address = vault.get_hot_address().unwrap_or_else(|_| "Error loading address".to_string());
+        let cold_address = vault.get_cold_address().unwrap_or_else(|_| "Error loading address".to_string());
+        
+        let details_text = format!(
+            "🏛️ COMPREHENSIVE VAULT DETAILS\n\n\
+            📊 CONFIGURATION\n\
+            💰 Amount: {} sats ({:.8} BTC)\n\
+            ⏰ CSV Delay: {} blocks\n\
+            🌐 Network: Mutinynet (Signet)\n\
+            🔒 Vault Type: Taproot P2TR with CTV\n\n\
+            🔑 ADDRESSES & EXPLORER LINKS\n\
+            🏛️ Vault Address:\n\
+            {}\n\
+            🔗 {}\n\n\
+            🔥 Hot Wallet Address:\n\
+            {}\n\
+            🔗 {}\n\n\
+            ❄️ Cold Wallet Address:\n\
+            {}\n\
+            🔗 {}\n\n\
+            📋 CURRENT STATUS\n\
+            🎯 State: {}\n\
+            {}\n\n\
+            🔧 TECHNICAL DETAILS\n\
+            🛡️ Security: OP_CHECKTEMPLATEVERIFY covenant\n\
+            ⚡ Script: CheckSequenceVerify time delays\n\
+            🚨 Emergency: Immediate cold clawback available\n\
+            ⏰ Normal: Hot withdrawal after CSV delay\n\n\
+            📋 VAULT OPERATIONS\n\
+            • All operations are automated via RPC\n\
+            • No manual transaction construction needed\n\
+            • Real-time blockchain monitoring\n\
+            • Mutinynet block explorer integration\n\n\
+            💡 Press ESC to close",
+            vault.amount,
+            vault.amount as f64 / 100_000_000.0,
+            vault.csv_delay,
+            vault_address,
+            explorer::address_url(&vault_address),
+            hot_address,
+            explorer::address_url(&hot_address),
+            cold_address,
+            explorer::address_url(&cold_address),
+            match &app.vault_status {
+                VaultStatus::None => "None".to_string(),
+                VaultStatus::Created { .. } => "✅ Created - Ready for funding".to_string(),
+                VaultStatus::Funded { confirmations, .. } => format!("💰 Funded - {} confirmations", confirmations),
+                VaultStatus::Triggered { csv_blocks_remaining, .. } => {
+                    match csv_blocks_remaining {
+                        Some(0) => "🚀 Triggered - CSV complete, ready for withdrawal".to_string(),
+                        Some(n) => format!("🚀 Triggered - {} blocks remaining", n),
+                        None => "🚀 Triggered - CSV status unknown".to_string(),
+                    }
+                },
+                VaultStatus::Completed { tx_type, .. } => format!("🎉 Completed - {}", tx_type),
+            },
+            match &app.vault_status {
+                VaultStatus::Funded { utxo, .. } => format!("💎 Funding UTXO: {}", utxo),
+                VaultStatus::Triggered { trigger_utxo, .. } => format!("⚡ Trigger UTXO: {}", trigger_utxo),
+                VaultStatus::Completed { final_address, .. } => format!("🏠 Final Address: {}", final_address),
+                _ => "".to_string(),
+            }
+        );
+        
+        let popup = Paragraph::new(details_text)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("🏛️ Vault Details - Mutinynet CTV Vault")
+                    .title_style(Style::default().fg(Color::Cyan).bold())
+            )
+            .wrap(Wrap { trim: true })
+            .style(Style::default().fg(Color::White).bg(Color::Black));
+        
+        f.render_widget(popup, popup_area);
+    } else {
+        let no_vault_text = "🏛️ NO VAULT DETAILS\n\n\
+            📋 No vault has been created yet.\n\n\
+            To create a vault:\n\
+            1. Press 'n' to create a new vault\n\
+            2. Press 'f' to fund it via RPC\n\
+            3. Use 't', 'c', 'h' for vault operations\n\n\
+            💡 Press ESC to close";
+        
+        let popup = Paragraph::new(no_vault_text)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("❌ No Vault Details")
+                    .title_style(Style::default().fg(Color::Red).bold())
+            )
+            .wrap(Wrap { trim: true })
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(Color::White).bg(Color::Black));
+        
+        f.render_widget(popup, popup_area);
+    }
 }
 
 /// Helper function to create a centered rectangle
