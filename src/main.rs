@@ -4,11 +4,14 @@ use clap::{Parser, Subcommand};
 use std::{env, str::FromStr, time::Duration};
 use tokio::time::sleep;
 
+mod config;
 mod ctv;
+mod error;
 mod explorer_client;
 mod rpc_client;
 mod taproot_vault;
 mod ui;
+mod utils;
 
 use rpc_client::MutinynetClient;
 use taproot_vault::TaprootVault;
