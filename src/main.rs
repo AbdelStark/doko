@@ -139,6 +139,37 @@ mod ui;
 
 use rpc_client::MutinynetClient;
 use taproot_vault::TaprootVault;
+use advanced_vault::AdvancedTaprootVault;
+
+/// Vault implementation type
+#[derive(Clone, Debug)]
+pub enum VaultType {
+    /// Simple Taproot vault with basic CTV protection
+    Simple,
+    /// Advanced vault with CTV + CSFS key delegation
+    AdvancedCsfsKeyDelegation,
+}
+
+impl FromStr for VaultType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "simple" => Ok(VaultType::Simple),
+            "advanced-csfs-key-delegation" => Ok(VaultType::AdvancedCsfsKeyDelegation),
+            _ => Err(format!("Invalid vault type: {}", s)),
+        }
+    }
+}
+
+impl std::fmt::Display for VaultType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            VaultType::Simple => write!(f, "simple"),
+            VaultType::AdvancedCsfsKeyDelegation => write!(f, "advanced-csfs-key-delegation"),
+        }
+    }
+}
 
 #[derive(Parser)]
 #[command(name = "doko")]
@@ -158,6 +189,9 @@ enum Commands {
         /// CSV delay in blocks
         #[arg(short, long, default_value_t = vault_config::DEFAULT_CSV_DELAY)]
         delay: u32,
+        /// Vault implementation type
+        #[arg(long, default_value = "simple")]
+        vault_type: VaultType,
     },
     /// Fund the vault with the specified UTXO
     FundVault {
@@ -220,6 +254,91 @@ enum Commands {
         #[arg(short, long, default_value = "cold")]
         scenario: String,
     },
+    /// Create a delegation for advanced vaults
+    CreateDelegation {
+        /// Vault configuration file
+        #[arg(short, long, default_value = "advanced_vault.json")]
+        vault_file: String,
+        /// Maximum amount delegate can spend
+        #[arg(short, long)]
+        max_amount: u64,
+        /// Validity period in hours
+        #[arg(long, default_value_t = 24)]
+        validity_hours: u64,
+        /// Purpose description
+        #[arg(short, long)]
+        purpose: String,
+        /// Specific UTXO (optional)
+        #[arg(long)]
+        specific_utxo: Option<String>,
+    },
+    /// Create delegation from template
+    CreateDelegationFromTemplate {
+        /// Vault configuration file
+        #[arg(short, long, default_value = "advanced_vault.json")]
+        vault_file: String,
+        /// Template name (daily_ops, weekly_ops, emergency)
+        #[arg(short, long)]
+        template: String,
+        /// Custom amount (override template default)
+        #[arg(long)]
+        custom_amount: Option<u64>,
+        /// Custom validity hours (override template default)
+        #[arg(long)]
+        custom_hours: Option<u64>,
+        /// Custom purpose (override template default)
+        #[arg(long)]
+        custom_purpose: Option<String>,
+    },
+    /// List active delegations
+    ListDelegations {
+        /// Vault configuration file
+        #[arg(short, long, default_value = "advanced_vault.json")]
+        vault_file: String,
+        /// Include delegation history
+        #[arg(long, default_value_t = false)]
+        include_history: bool,
+    },
+    /// Advanced vault emergency spend (immediate treasurer override)
+    EmergencySpend {
+        /// Trigger UTXO (txid:vout)
+        trigger_utxo: String,
+        /// Destination address
+        destination: String,
+        /// Vault configuration file
+        #[arg(short, long, default_value = "advanced_vault.json")]
+        vault_file: String,
+    },
+    /// Advanced vault delegated spend (operations manager with delegation)
+    DelegatedSpend {
+        /// Trigger UTXO (txid:vout)
+        trigger_utxo: String,
+        /// Delegation ID to use
+        delegation_id: String,
+        /// Destination address
+        destination: String,
+        /// Vault configuration file
+        #[arg(short, long, default_value = "advanced_vault.json")]
+        vault_file: String,
+    },
+    /// Advanced vault time-delayed spend (treasurer with CSV delay)
+    TimelockSpend {
+        /// Trigger UTXO (txid:vout)
+        trigger_utxo: String,
+        /// Destination address
+        destination: String,
+        /// Vault configuration file
+        #[arg(short, long, default_value = "advanced_vault.json")]
+        vault_file: String,
+    },
+    /// Advanced vault cold recovery (emergency clawback)
+    ColdRecovery {
+        /// Trigger UTXO (txid:vout)
+        trigger_utxo: String,
+        /// Vault configuration file
+        #[arg(short, long, default_value = "advanced_vault.json")]
+        vault_file: String,
+    },
     /// Launch interactive TUI dashboard
     Dashboard,
 }
@@ -229,8 +348,8 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::CreateVault { amount, delay } => {
-            create_vault(amount, delay).await?;
+        Commands::CreateVault { amount, delay, vault_type } => {
+            create_vault(amount, delay, vault_type).await?;
         }
         Commands::FundVault { address, utxo } => {
             fund_vault(&address, &utxo).await?;
@@ -266,6 +385,58 @@ async fn main() -> Result<()> {
         } => {
             auto_demo(amount, delay, &scenario).await?;
         }
+        Commands::CreateDelegation {
+            vault_file,
+            max_amount,
+            validity_hours,
+            purpose,
+            specific_utxo,
+        } => {
+            create_delegation(&vault_file, max_amount, validity_hours, &purpose, specific_utxo).await?;
+        }
+        Commands::CreateDelegationFromTemplate {
+            vault_file,
+            template,
+            custom_amount,
+            custom_hours,
+            custom_purpose,
+        } => {
+            create_delegation_from_template(&vault_file, &template, custom_amount, custom_hours, custom_purpose.as_deref()).await?;
+        }
+        Commands::ListDelegations {
+            vault_file,
+            include_history,
+        } => {
+            list_delegations(&vault_file, include_history).await?;
+        }
+        Commands::EmergencySpend {
+            trigger_utxo,
+            destination,
+            vault_file,
+        } => {
+            emergency_spend(&trigger_utxo, &destination, &vault_file).await?;
+        }
+        Commands::DelegatedSpend {
+            trigger_utxo,
+            delegation_id,
+            destination,
+            vault_file,
+        } => {
+            delegated_spend(&trigger_utxo, &delegation_id, &destination, &vault_file).await?;
+        }
+        Commands::TimelockSpend {
+            trigger_utxo,
+            destination,
+            vault_file,
+        } => {
+            timelock_spend(&trigger_utxo, &destination, &vault_file).await?;
+        }
+        Commands::ColdRecovery {
+            trigger_utxo,
+            vault_file,
+        } => {
+            cold_recovery(&trigger_utxo, &vault_file).await?;
+        }
         Commands::Dashboard => {
             if let Some(transcript_content) = ui::run_tui().await? {
                 // Display transcript content to console after TUI cleanup
@@ -278,20 +449,57 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn create_vault(amount: u64, delay: u32) -> Result<()> {
-    println!(
-        "Creating Taproot vault with {} sats, {} block delay",
-        amount, delay
-    );
+async fn create_vault(amount: u64, delay: u32, vault_type: VaultType) -> Result<()> {
+    match vault_type {
+        VaultType::Simple => {
+            println!(
+                "Creating simple Taproot vault with {} sats, {} block delay",
+                amount, delay
+            );
 
-    let taproot_vault = TaprootVault::new(amount, delay)?;
-    let vault_address = taproot_vault.get_vault_address()?;
+            let taproot_vault = TaprootVault::new(amount, delay)?;
+            let vault_address = taproot_vault.get_vault_address()?;
 
-    println!("Vault address: {}", vault_address);
-    println!("Send {} sats to this address to fund the vault", amount);
+            println!("Vault address: {}", vault_address);
+            println!("Send {} sats to this address to fund the vault", amount);
 
-    // Save vault plan for later use
-    taproot_vault.save_to_file("taproot_vault.json")?;
+            // Save vault plan for later use
+            taproot_vault.save_to_file("taproot_vault.json")?;
+        }
+        VaultType::AdvancedCsfsKeyDelegation => {
+            println!(
+                "Creating advanced Taproot vault with CTV + CSFS key delegation"
+            );
+            println!("Amount: {} sats, CSV delay: {} blocks", amount, delay);
+
+            let advanced_vault = AdvancedTaprootVault::new(amount, delay)?;
+            let vault_address = advanced_vault.get_vault_address()?;
+            let trigger_address = advanced_vault.get_trigger_address()?;
+            let cold_address = advanced_vault.get_cold_address()?;
+            let ops_address = advanced_vault.get_operations_address()?;
+
+            println!("\n🏦 Advanced Vault Addresses:");
+            println!("Vault:       {}", vault_address);
+            println!("Trigger:     {}", trigger_address);
+            println!("Cold:        {}", cold_address);
+            println!("Operations:  {}", ops_address);
+
+            println!("\n🔑 Role-Based Access:");
+            println!("Treasurer:   {} (emergency override + delegation creation)", &advanced_vault.treasurer_pubkey[..16]);
+            println!("Operations:  {} (delegated spending)", &advanced_vault.operations_pubkey[..16]);
+
+            println!("\n📋 Default Templates:");
+            for (name, template) in &advanced_vault.delegation_templates {
+                println!("  {}: {} sats, {} hours", name, template.default_max_amount, template.default_validity_hours);
+            }
+
+            println!("\nSend {} sats to the vault address to fund", amount);
+
+            // Save advanced vault configuration
+            advanced_vault.save_to_file("advanced_vault.json")?;
+            println!("📁 Vault configuration saved to advanced_vault.json");
+        }
+    }
 
     Ok(())
 }
@@ -1101,6 +1309,312 @@ async fn execute_hot_withdrawal(
     println!("   💰 Amount: {} sats", hot_tx.output[0].value.to_sat());
     println!("   📍 Address: {}", vault.get_hot_address()?);
     println!("   ✅ Funds successfully transferred to hot wallet");
+
+    Ok(())
+}
+
+// Advanced Vault CLI Functions
+
+async fn create_delegation(
+    vault_file: &str,
+    max_amount: u64,
+    validity_hours: u64,
+    purpose: &str,
+    specific_utxo: Option<String>,
+) -> Result<()> {
+    println!("🔑 Creating delegation for advanced vault\n");
+
+    let mut advanced_vault = AdvancedTaprootVault::load_from_file(vault_file)?;
+
+    let delegation = advanced_vault.create_delegation(
+        max_amount,
+        validity_hours,
+        purpose,
+        specific_utxo,
+    )?;
+
+    println!("✅ Delegation created successfully!");
+    println!("  ID: {}", delegation.message.delegation_id);
+    println!("  Delegate: {}...", &delegation.message.delegate_pubkey[..16]);
+    println!("  Max Amount: {} sats", delegation.message.max_amount);
+    println!("  Expires: {} (Unix timestamp)", delegation.message.expires_at);
+    println!("  Purpose: {}", delegation.message.purpose);
+    if let Some(utxo) = &delegation.message.specific_utxo {
+        println!("  Specific UTXO: {}", utxo);
+    }
+    println!("  Signature: {}...", &delegation.delegator_signature[..32]);
+
+    // Save updated vault
+    advanced_vault.save_to_file(vault_file)?;
+    println!("\n📁 Vault configuration updated: {}", vault_file);
+
+    Ok(())
+}
+
+async fn create_delegation_from_template(
+    vault_file: &str,
+    template: &str,
+    custom_amount: Option<u64>,
+    custom_hours: Option<u64>,
+    custom_purpose: Option<&str>,
+) -> Result<()> {
+    println!("📋 Creating delegation from template: {}\n", template);
+
+    let mut advanced_vault = AdvancedTaprootVault::load_from_file(vault_file)?;
+
+    let delegation = advanced_vault.create_delegation_from_template(
+        template,
+        custom_amount,
+        custom_hours,
+        custom_purpose,
+    )?;
+
+    println!("✅ Delegation created from template!");
+    println!("  Template: {}", template);
+    println!("  ID: {}", delegation.message.delegation_id);
+    println!("  Max Amount: {} sats", delegation.message.max_amount);
+    println!("  Validity: {} hours", {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        (delegation.message.expires_at - now) / 3600
+    });
+    println!("  Purpose: {}", delegation.message.purpose);
+
+    // Save updated vault
+    advanced_vault.save_to_file(vault_file)?;
+    println!("\n📁 Vault configuration updated: {}", vault_file);
+
+    Ok(())
+}
+
+async fn list_delegations(vault_file: &str, include_history: bool) -> Result<()> {
+    println!("📋 Delegation Status\n");
+
+    let advanced_vault = AdvancedTaprootVault::load_from_file(vault_file)?;
+
+    // Show active delegations
+    let active_delegations = advanced_vault.get_active_delegations();
+    println!("🟢 Active Delegations ({})", active_delegations.len());
+    if active_delegations.is_empty() {
+        println!("  No active delegations");
+    } else {
+        for delegation in active_delegations {
+            println!("  {} - {} sats - {}", 
+                &delegation.message.delegation_id[..16],
+                delegation.message.max_amount,
+                delegation.message.purpose
+            );
+        }
+    }
+
+    if include_history {
+        println!("\n📚 Delegation History ({})", advanced_vault.delegation_history.len());
+        if advanced_vault.delegation_history.is_empty() {
+            println!("  No delegation history");
+        } else {
+            for delegation in &advanced_vault.delegation_history {
+                let status = if delegation.used { "USED" } else { "EXPIRED" };
+                println!("  {} - {} sats - {} - {}",
+                    &delegation.message.delegation_id[..16],
+                    delegation.message.max_amount,
+                    delegation.message.purpose,
+                    status
+                );
+                if let Some(ref txid) = delegation.usage_txid {
+                    println!("    Used in: {}", txid);
+                }
+            }
+        }
+    }
+
+    println!("\n📋 Available Templates:");
+    for (name, template) in &advanced_vault.delegation_templates {
+        println!("  {}: {} sats, {} hours - {}",
+            name,
+            template.default_max_amount,
+            template.default_validity_hours,
+            template.default_purpose
+        );
+    }
+
+    Ok(())
+}
+
+async fn emergency_spend(trigger_utxo: &str, destination: &str, vault_file: &str) -> Result<()> {
+    println!("🚨 Emergency Override Spend\n");
+
+    let advanced_vault = AdvancedTaprootVault::load_from_file(vault_file)?;
+
+    // Parse trigger UTXO
+    let parts: Vec<&str> = trigger_utxo.split(':').collect();
+    if parts.len() != 2 {
+        return Err(anyhow::anyhow!("Invalid UTXO format. Use txid:vout"));
+    }
+
+    let txid = bitcoin::Txid::from_str(parts[0])?;
+    let vout: u32 = parts[1].parse()?;
+    let trigger_outpoint = OutPoint::new(txid, vout);
+
+    // Create emergency spend transaction
+    let emergency_tx = advanced_vault.create_emergency_spend_tx(trigger_outpoint, destination)?;
+    let emergency_hex = bitcoin::consensus::encode::serialize_hex(&emergency_tx);
+
+    println!("✅ Emergency spend transaction created!");
+    println!("  TXID: {}", emergency_tx.txid());
+    println!("  From: {} (trigger)", trigger_utxo);
+    println!("  To: {}", destination);
+    println!("  Amount: {} sats", emergency_tx.output[0].value.to_sat());
+    println!("  Authority: Treasurer (immediate override)");
+    println!();
+    println!("📜 Raw Transaction Hex:");
+    println!("{}", emergency_hex);
+    println!();
+    println!("🚀 Broadcast command:");
+    println!("bitcoin-cli -signet sendrawtransaction {}", emergency_hex);
+
+    Ok(())
+}
+
+async fn delegated_spend(
+    trigger_utxo: &str,
+    delegation_id: &str,
+    destination: &str,
+    vault_file: &str,
+) -> Result<()> {
+    println!("🤝 Delegated Spend\n");
+
+    let mut advanced_vault = AdvancedTaprootVault::load_from_file(vault_file)?;
+
+    // Find the delegation
+    let delegation = advanced_vault
+        .active_delegations
+        .iter()
+        .find(|d| d.message.delegation_id.starts_with(delegation_id))
+        .ok_or_else(|| anyhow::anyhow!("Delegation not found: {}", delegation_id))?
+        .clone();
+
+    // Validate delegation
+    advanced_vault.validate_delegation(&delegation)?;
+
+    // Parse trigger UTXO
+    let parts: Vec<&str> = trigger_utxo.split(':').collect();
+    if parts.len() != 2 {
+        return Err(anyhow::anyhow!("Invalid UTXO format. Use txid:vout"));
+    }
+
+    let txid = bitcoin::Txid::from_str(parts[0])?;
+    let vout: u32 = parts[1].parse()?;
+    let trigger_outpoint = OutPoint::new(txid, vout);
+
+    // Create delegated spend transaction
+    let delegated_tx = advanced_vault.create_delegated_spend_tx(
+        trigger_outpoint,
+        &delegation,
+        destination,
+    )?;
+    let delegated_hex = bitcoin::consensus::encode::serialize_hex(&delegated_tx);
+
+    println!("✅ Delegated spend transaction created!");
+    println!("  TXID: {}", delegated_tx.txid());
+    println!("  From: {} (trigger)", trigger_utxo);
+    println!("  To: {}", destination);
+    println!("  Amount: {} sats", delegated_tx.output[0].value.to_sat());
+    println!("  Authority: Operations (delegated via CSFS)");
+    println!("  Delegation: {}", delegation.message.delegation_id);
+    println!("  Purpose: {}", delegation.message.purpose);
+    println!();
+    println!("📜 Raw Transaction Hex:");
+    println!("{}", delegated_hex);
+    println!();
+    println!("🚀 Broadcast command:");
+    println!("bitcoin-cli -signet sendrawtransaction {}", delegated_hex);
+
+    // Mark delegation as used
+    advanced_vault.mark_delegation_used(&delegation.message.delegation_id, Some(delegated_tx.txid().to_string()));
+    advanced_vault.save_to_file(vault_file)?;
+    println!("\n📁 Delegation marked as used and vault updated");
+
+    Ok(())
+}
+
+async fn timelock_spend(trigger_utxo: &str, destination: &str, vault_file: &str) -> Result<()> {
+    println!("⏰ Time-Delayed Spend\n");
+
+    let advanced_vault = AdvancedTaprootVault::load_from_file(vault_file)?;
+
+    // Parse trigger UTXO
+    let parts: Vec<&str> = trigger_utxo.split(':').collect();
+    if parts.len() != 2 {
+        return Err(anyhow::anyhow!("Invalid UTXO format. Use txid:vout"));
+    }
+
+    let txid = bitcoin::Txid::from_str(parts[0])?;
+    let vout: u32 = parts[1].parse()?;
+    let trigger_outpoint = OutPoint::new(txid, vout);
+
+    // Create time-delayed spend transaction
+    let timelock_tx = advanced_vault.create_timelock_spend_tx(trigger_outpoint, destination)?;
+    let timelock_hex = bitcoin::consensus::encode::serialize_hex(&timelock_tx);
+
+    println!("✅ Time-delayed spend transaction created!");
+    println!("  TXID: {}", timelock_tx.txid());
+    println!("  From: {} (trigger)", trigger_utxo);
+    println!("  To: {}", destination);
+    println!("  Amount: {} sats", timelock_tx.output[0].value.to_sat());
+    println!("  Authority: Treasurer (with CSV delay)");
+    println!("  CSV Delay: {} blocks", advanced_vault.csv_delay);
+    println!();
+    println!("⚠️  Note: This transaction requires the CSV delay to have passed!");
+    println!("   The trigger UTXO must be {} blocks old", advanced_vault.csv_delay);
+    println!();
+    println!("📜 Raw Transaction Hex:");
+    println!("{}", timelock_hex);
+    println!();
+    println!("🚀 Broadcast command:");
+    println!("bitcoin-cli -signet sendrawtransaction {}", timelock_hex);
+
+    Ok(())
+}
+
+async fn cold_recovery(trigger_utxo: &str, vault_file: &str) -> Result<()> {
+    println!("🧊 Cold Recovery (Emergency Clawback)\n");
+
+    let advanced_vault = AdvancedTaprootVault::load_from_file(vault_file)?;
+
+    // Parse trigger UTXO
+    let parts: Vec<&str> = trigger_utxo.split(':').collect();
+    if parts.len() != 2 {
+        return Err(anyhow::anyhow!("Invalid UTXO format. Use txid:vout"));
+    }
+
+    let txid = bitcoin::Txid::from_str(parts[0])?;
+    let vout: u32 = parts[1].parse()?;
+    let trigger_outpoint = OutPoint::new(txid, vout);
+
+    // Create cold recovery transaction
+    let cold_tx = advanced_vault.create_cold_recovery_tx(trigger_outpoint)?;
+    let cold_hex = bitcoin::consensus::encode::serialize_hex(&cold_tx);
+
+    let cold_address = advanced_vault.get_cold_address()?;
+
+    println!("✅ Cold recovery transaction created!");
+    println!("  TXID: {}", cold_tx.txid());
+    println!("  From: {} (trigger)", trigger_utxo);
+    println!("  To: {} (cold wallet)", cold_address);
+    println!("  Amount: {} sats", cold_tx.output[0].value.to_sat());
+    println!("  Authority: CTV covenant (no signature required)");
+    println!();
+    println!("🚨 This is an emergency clawback transaction!");
+    println!("   Funds will be swept to cold storage immediately");
+    println!("   No additional signatures or delays required");
+    println!();
+    println!("📜 Raw Transaction Hex:");
+    println!("{}", cold_hex);
+    println!();
+    println!("🚀 Broadcast command:");
+    println!("bitcoin-cli -signet sendrawtransaction {}", cold_hex);
 
     Ok(())
 }
