@@ -128,6 +128,7 @@ use clap::{Parser, Subcommand};
 use std::{env, str::FromStr, time::Duration};
 use tokio::time::sleep;
 
+mod advanced_vault;
 mod config;
 mod csfs_primitives;
 mod error;

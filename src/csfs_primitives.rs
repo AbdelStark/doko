@@ -146,6 +146,7 @@ pub struct DelegationTemplate {
 /// - Message serialization must be deterministic to prevent signature malleability
 /// - Signature verification should match exactly what CSFS will verify on-chain
 /// - Random nonces are generated securely using the secp256k1 library
+#[derive(Clone, Debug)]
 pub struct CsfsOperations {
     /// Secp256k1 context for cryptographic operations
     secp: Secp256k1<secp256k1::All>,
