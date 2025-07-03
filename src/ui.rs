@@ -8,6 +8,7 @@ use anyhow::Result;
 use arboard::Clipboard;
 use bitcoin::{OutPoint, Txid};
 use chrono;
+use crate::explorer_client::MutinynetExplorer;
 use crossterm::{
     event::{
         self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseButton,
@@ -86,6 +87,8 @@ pub struct App {
     pub vault: Option<TaprootVault>,
     /// RPC client for blockchain interaction
     pub rpc: MutinynetClient,
+    /// Explorer client for balance queries
+    pub explorer: MutinynetExplorer,
     /// Current block height
     pub block_height: u64,
     /// Last update time
@@ -124,6 +127,12 @@ pub struct App {
     pub transcript_log: Vec<String>,
     /// Session start time for transcript
     pub session_start: Instant,
+    /// Vault address balance
+    pub vault_balance: u64,
+    /// Hot address balance
+    pub hot_balance: u64,
+    /// Cold address balance
+    pub cold_balance: u64,
 }
 
 /// Vault operational status
@@ -166,6 +175,7 @@ impl App {
     /// Create a new TUI application
     pub fn new() -> Result<Self> {
         let rpc = MutinynetClient::new()?;
+        let explorer = MutinynetExplorer::new()?;
         let block_height = rpc.get_block_count()?;
 
         // Try to load existing vault from auto_vault.json
@@ -196,6 +206,7 @@ impl App {
             ],
             vault,
             rpc,
+            explorer,
             block_height,
             last_update: Instant::now(),
             transactions: Vec::new(),
@@ -215,6 +226,9 @@ impl App {
             status_timer: None,
             transcript_log: Vec::new(),
             session_start: Instant::now(),
+            vault_balance: 0,
+            hot_balance: 0,
+            cold_balance: 0,
         };
         
         // Initialize transcript log
@@ -508,6 +522,19 @@ impl App {
         for tx in &mut self.transactions {
             if let Ok(txid) = tx.txid.parse::<bitcoin::Txid>() {
                 tx.confirmations = self.rpc.get_confirmations(&txid).unwrap_or(0);
+            }
+        }
+
+        // Update address balances if we have a vault
+        if let Some(ref vault) = self.vault {
+            if let Ok(vault_address) = vault.get_vault_address() {
+                self.vault_balance = self.explorer.get_address_balance(&vault_address).await.unwrap_or(0);
+            }
+            if let Ok(hot_address) = vault.get_hot_address() {
+                self.hot_balance = self.explorer.get_address_balance(&hot_address).await.unwrap_or(0);
+            }
+            if let Ok(cold_address) = vault.get_cold_address() {
+                self.cold_balance = self.explorer.get_address_balance(&cold_address).await.unwrap_or(0);
             }
         }
 
@@ -1604,16 +1631,16 @@ fn render_vault_details_popup(f: &mut Frame, app: &App) {
             ⏰ CSV Delay: {} blocks\n\
             🌐 Network: Mutinynet (Signet)\n\
             🔒 Vault Type: Taproot P2TR with CTV\n\n\
-            🔑 ADDRESSES & EXPLORER LINKS\n\
+            🔑 ADDRESSES & BALANCES\n\
             🏛️ Vault Address:\n\
             {}\n\
-            🔗 {}\n\n\
+            💰 Balance: {} sats ({:.8} BTC)\n\n\
             🔥 Hot Wallet Address:\n\
             {}\n\
-            🔗 {}\n\n\
+            💰 Balance: {} sats ({:.8} BTC)\n\n\
             ❄️ Cold Wallet Address:\n\
             {}\n\
-            🔗 {}\n\n\
+            💰 Balance: {} sats ({:.8} BTC)\n\n\
             📋 CURRENT STATUS\n\
             🎯 State: {}\n\
             {}\n\n\
@@ -1632,11 +1659,14 @@ fn render_vault_details_popup(f: &mut Frame, app: &App) {
             vault.amount as f64 / 100_000_000.0,
             vault.csv_delay,
             vault_address,
-            explorer::address_url(&vault_address),
+            app.vault_balance,
+            app.vault_balance as f64 / 100_000_000.0,
             hot_address,
-            explorer::address_url(&hot_address),
+            app.hot_balance,
+            app.hot_balance as f64 / 100_000_000.0,
             cold_address,
-            explorer::address_url(&cold_address),
+            app.cold_balance,
+            app.cold_balance as f64 / 100_000_000.0,
             match &app.vault_status {
                 VaultStatus::None => "None".to_string(),
                 VaultStatus::Created { .. } => "✅ Created - Ready for funding".to_string(),
@@ -1659,7 +1689,7 @@ fn render_vault_details_popup(f: &mut Frame, app: &App) {
                 VaultStatus::Triggered { trigger_utxo, .. } =>
                     format!("⚡ Trigger UTXO: {}", trigger_utxo),
                 VaultStatus::Completed { final_address, .. } =>
-                    format!("🏠 Final Address: {}", final_address),
+                    format!("🏠 Final Address:\n    {}", final_address),
                 _ => "".to_string(),
             }
         );

@@ -5,6 +5,7 @@ use std::{env, str::FromStr, time::Duration};
 use tokio::time::sleep;
 
 mod ctv;
+mod explorer_client;
 mod rpc_client;
 mod taproot_vault;
 mod ui;
