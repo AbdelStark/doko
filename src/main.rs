@@ -1,3 +1,127 @@
+//! # Doko: Bitcoin Vault Proof-of-Concept
+//!
+//! Doko is a Bitcoin vault implementation using CheckTemplateVerify (CTV) covenants
+//! on the Mutinynet signet. It demonstrates secure Bitcoin custody with time-delayed 
+//! withdrawals and emergency recovery mechanisms.
+//!
+//! ## Overview
+//!
+//! The vault system provides three-layer security:
+//! 1. **Covenant Protection**: CTV restricts transaction templates
+//! 2. **Time Delays**: CSV enforces waiting periods for withdrawals  
+//! 3. **Emergency Recovery**: Immediate cold storage clawback capability
+//!
+//! ## Vault Flow
+//!
+//! ```text
+//! ┌─────────────┐    Fund    ┌─────────────┐   Trigger   ┌─────────────┐
+//! │   Vault     │  ────────> │    Vault    │  ────────>  │   Trigger   │
+//! │  Creation   │            │   Address   │             │   Output    │
+//! └─────────────┘            └─────────────┘             └─────────────┘
+//!                                                                │
+//!                                                                │
+//!                                                    ┌───────────┴───────────┐
+//!                                                    │                       │
+//!                                                    ▼                       ▼
+//!                                            ┌─────────────┐         ┌─────────────┐
+//!                                            │  Hot Path   │         │ Cold Path   │
+//!                                            │ (CSV Delay) │         │(Immediate)  │
+//!                                            └─────────────┘         └─────────────┘
+//!                                                    │                       │
+//!                                                    ▼                       ▼
+//!                                            ┌─────────────┐         ┌─────────────┐
+//!                                            │ Hot Wallet  │         │Cold Wallet  │
+//!                                            │  (Normal)   │         │(Emergency)  │
+//!                                            └─────────────┘         └─────────────┘
+//! ```
+//!
+//! ## Bitcoin Script Technology
+//!
+//! ### Taproot (BIP 341)
+//! - **Privacy**: Scripts hidden until spending
+//! - **Efficiency**: Smaller transactions and fees
+//! - **Flexibility**: Multiple spending conditions in script tree
+//!
+//! ### CheckTemplateVerify (BIP 119)
+//! - **Covenant Enforcement**: Restricts transaction output templates
+//! - **Predetermined Flows**: Exact spending conditions committed in advance
+//! - **Security**: Prevents unauthorized transaction modifications
+//!
+//! ### CheckSequenceVerify (BIP 112)
+//! - **Relative Timelocks**: Delays based on block confirmations
+//! - **Attack Response Time**: Window to detect and respond to threats
+//! - **Flexible Delays**: Configurable security vs convenience tradeoff
+//!
+//! ## Usage Examples
+//!
+//! ### Command Line Interface
+//! ```bash
+//! # Create a new vault
+//! doko create-vault --amount 100000 --delay 144
+//!
+//! # Run automated demonstration  
+//! doko auto-demo --scenario cold
+//!
+//! # Launch interactive dashboard
+//! doko dashboard
+//! ```
+//!
+//! ### Programmatic Usage
+//! ```rust
+//! use doko::TaprootVault;
+//!
+//! // Create vault with 0.001 BTC and 24-block delay
+//! let vault = TaprootVault::new(100_000, 24)?;
+//! let vault_address = vault.get_vault_address()?;
+//! 
+//! // Fund the vault, then trigger unvault
+//! let trigger_tx = vault.create_trigger_tx(vault_utxo)?;
+//! 
+//! // Emergency clawback if needed
+//! let cold_tx = vault.create_cold_tx(trigger_utxo)?;
+//! ```
+//!
+//! ## Security Model
+//!
+//! ### Threat Protection
+//! - **Hot Key Compromise**: Time delay allows cold clawback before theft
+//! - **Unauthorized Triggers**: CTV ensures only valid transaction templates
+//! - **Script Malleability**: Taproot and CTV prevent transaction modification
+//! - **Fee Manipulation**: Fixed fee amounts committed in covenant templates
+//!
+//! ### Trust Assumptions
+//! - **Network Security**: Relies on Bitcoin consensus for timelock enforcement
+//! - **Key Security**: Cold key must remain secure for emergency recovery
+//! - **Implementation Security**: Smart contract logic must be bug-free
+//!
+//! ## Network Compatibility
+//!
+//! Currently supports:
+//! - **Mutinynet**: Bitcoin signet with CTV and CSFS opcodes enabled
+//! - **Local Testing**: Regtest with custom signet configuration
+//!
+//! Future support planned for:
+//! - **Bitcoin Mainnet**: When CTV is activated (BIP 119)
+//! - **Alternative Networks**: Other signets with covenant support
+//!
+//! ## Module Structure
+//!
+//! - [`config`]: Network and operational constants
+//! - [`taproot_vault`]: Core vault implementation and Bitcoin script construction
+//! - [`rpc_client`]: Bitcoin Core RPC interface for transaction broadcast
+//! - [`explorer_client`]: Mutinynet block explorer API for balance queries
+//! - [`tx_decoder`]: Professional transaction analysis and CTV detection
+//! - [`ui`]: Terminal user interface for interactive vault management
+//! - [`error`]: Centralized error types and handling
+//!
+//! ## Development and Testing
+//!
+//! The project includes comprehensive testing infrastructure:
+//! - **Unit Tests**: Core vault logic with real transaction data
+//! - **Integration Tests**: Full vault flows on Mutinynet
+//! - **Interactive Demo**: TUI for hands-on exploration
+//! - **Automated Demo**: Scripted vault operations with detailed logging
+
 use crate::config::{files, network, vault as vault_config};
 use anyhow::Result;
 use bitcoin::OutPoint;

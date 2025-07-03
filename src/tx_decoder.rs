@@ -3,7 +3,7 @@
 //! This module provides professional-grade Bitcoin transaction analysis and decoding
 //! with special support for CTV covenants and Taproot script trees.
 
-use crate::error::{VaultError, VaultResult};
+use crate::error::VaultResult;
 use bitcoin::{
     opcodes::all::*,
     script::{Instruction, Script},
@@ -217,8 +217,8 @@ pub enum WitnessItemType {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum CovenantType {
-    CTV,          // CheckTemplateVerify
-    CSFS,         // CheckSigFromStack
+    Ctv,          // CheckTemplateVerify
+    Csfs,         // CheckSigFromStack
     Vault,        // Vault pattern
     TimeDelay,    // CSV/CLTV
     Multisig,     // Multi-signature
@@ -228,8 +228,8 @@ pub enum CovenantType {
 impl fmt::Display for CovenantType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CovenantType::CTV => write!(f, "CheckTemplateVerify"),
-            CovenantType::CSFS => write!(f, "CheckSigFromStack"),
+            CovenantType::Ctv => write!(f, "CheckTemplateVerify"),
+            CovenantType::Csfs => write!(f, "CheckSigFromStack"),
             CovenantType::Vault => write!(f, "Vault"),
             CovenantType::TimeDelay => write!(f, "Time Delay"),
             CovenantType::Multisig => write!(f, "Multi-signature"),
@@ -464,7 +464,7 @@ impl TransactionDecoder {
                 if witness.len() >= 2 {
                     let script_bytes = &witness[witness.len() - 2];
                     let script = Script::from_bytes(script_bytes);
-                    let script_analysis = self.analyze_script(&script)?;
+                    let script_analysis = self.analyze_script(script)?;
                     
                     return Ok(Some(TaprootWitnessInfo {
                         script_path_spend: true,
@@ -601,7 +601,7 @@ impl TransactionDecoder {
         let input_ctv_count = inputs.iter()
             .filter(|i| {
                 i.script_sig.covenant_info.as_ref()
-                    .map(|c| c.covenant_type == CovenantType::CTV)
+                    .map(|c| c.covenant_type == CovenantType::Ctv)
                     .unwrap_or(false)
             })
             .count();
@@ -609,7 +609,7 @@ impl TransactionDecoder {
         let output_ctv_count = outputs.iter()
             .filter(|o| {
                 o.script_pubkey.covenant_info.as_ref()
-                    .map(|c| c.covenant_type == CovenantType::CTV)
+                    .map(|c| c.covenant_type == CovenantType::Ctv)
                     .unwrap_or(false)
             })
             .count();
@@ -764,7 +764,7 @@ impl TransactionDecoder {
         for opcode in opcodes {
             if opcode.opcode.contains("NOP4") || opcode.description.contains("CHECKTEMPLATEVERIFY") {
                 return Ok(Some(CovenantInfo {
-                    covenant_type: CovenantType::CTV,
+                    covenant_type: CovenantType::Ctv,
                     template_hash: opcode.data.clone(),
                     parameters: HashMap::new(),
                     validation_rules: vec!["Transaction must match committed template".to_string()],
@@ -923,8 +923,8 @@ impl TransactionDecoder {
 
     fn covenant_type_description(&self, covenant_type: &CovenantType) -> &'static str {
         match covenant_type {
-            CovenantType::CTV => "CheckTemplateVerify",
-            CovenantType::CSFS => "CheckSigFromStack",
+            CovenantType::Ctv => "CheckTemplateVerify",
+            CovenantType::Csfs => "CheckSigFromStack",
             CovenantType::Vault => "Vault",
             CovenantType::TimeDelay => "Time Delay",
             CovenantType::Multisig => "Multi-signature",
@@ -949,6 +949,7 @@ impl fmt::Display for WitnessItemType {
 
 impl TransactionAnalysis {
     /// Generate a comprehensive report
+    #[allow(dead_code)]
     pub fn generate_report(&self) -> String {
         let mut report = String::new();
         
@@ -984,6 +985,7 @@ impl TransactionAnalysis {
     }
 
     /// Generate a concise summary
+    #[allow(dead_code)]
     pub fn generate_summary(&self) -> String {
         let patterns_str = if self.patterns.is_empty() {
             "Standard transaction".to_string()
