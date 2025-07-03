@@ -110,7 +110,6 @@
 //! - [`taproot_vault`]: Core vault implementation and Bitcoin script construction
 //! - [`rpc_client`]: Bitcoin Core RPC interface for transaction broadcast
 //! - [`explorer_client`]: Mutinynet block explorer API for balance queries
-//! - [`tx_decoder`]: Professional transaction analysis and CTV detection
 //! - [`ui`]: Terminal user interface for interactive vault management
 //! - [`error`]: Centralized error types and handling
 //!
@@ -134,12 +133,10 @@ mod error;
 mod explorer_client;
 mod rpc_client;
 mod taproot_vault;
-mod tx_decoder;
 mod ui;
 
 use rpc_client::MutinynetClient;
 use taproot_vault::TaprootVault;
-use tx_decoder::TransactionDecoder;
 
 #[derive(Parser)]
 #[command(name = "doko")]
@@ -825,80 +822,6 @@ async fn create_cold(trigger_utxo: &str) -> Result<()> {
     Ok(())
 }
 
-/// Decode and display transaction analysis
-fn decode_and_display_transaction(tx: &bitcoin::Transaction, tx_name: &str) -> Result<()> {
-    let decoder = TransactionDecoder::new(bitcoin::Network::Signet);
-    
-    match decoder.analyze_transaction(tx) {
-        Ok(analysis) => {
-            println!();
-            println!("┌─────────────────────────────────────────────────────────────┐");
-            println!("│              🔍 TRANSACTION ANALYSIS: {}              │", tx_name.to_uppercase());
-            println!("└─────────────────────────────────────────────────────────────┘");
-            println!();
-            
-            // Basic info
-            println!("📊 Transaction Summary:");
-            println!("   TXID: {}", analysis.metadata.txid);
-            println!("   Size: {} bytes, Weight: {} WU", analysis.metadata.size, analysis.metadata.weight);
-            println!("   Inputs: {}, Outputs: {}", analysis.metadata.input_count, analysis.metadata.output_count);
-            println!();
-            
-            // Detected patterns
-            if !analysis.patterns.is_empty() {
-                println!("🔍 Detected Patterns:");
-                for pattern in &analysis.patterns {
-                    println!("   • {} ({}% confidence)", pattern.pattern_type, (pattern.confidence * 100.0) as u8);
-                    println!("     {}", pattern.description);
-                }
-                println!();
-            }
-            
-            // Input analysis
-            println!("📥 Input Analysis:");
-            for input in &analysis.inputs {
-                println!("   [{}] {} via {}", input.index, input.address_type, input.spending_type);
-                if !input.witness.stack_items.is_empty() {
-                    println!("       Witness: {} items", input.witness.stack_items.len());
-                    for (i, item) in input.witness.stack_items.iter().enumerate() {
-                        println!("         [{}] {}: {}", i, item.item_type, item.description);
-                    }
-                }
-                
-                // Show Taproot script details if available
-                if let Some(taproot_info) = &input.witness.taproot_info {
-                    if let Some(script_analysis) = &taproot_info.script {
-                        if !script_analysis.opcodes.is_empty() {
-                            println!("       Script Opcodes ({}):", script_analysis.opcodes.len());
-                            for opcode in &script_analysis.opcodes {
-                                println!("         • {}: {}", opcode.opcode, opcode.description);
-                            }
-                        }
-                    }
-                }
-            }
-            println!();
-            
-            // Output analysis
-            println!("📤 Output Analysis:");
-            for output in &analysis.outputs {
-                println!("   [{}] {} sats to {} address", output.index, output.value, output.address_type);
-                if let Some(address) = &output.address {
-                    println!("       Address: {}", address);
-                }
-                if let Some(covenant) = &output.script_pubkey.covenant_info {
-                    println!("       Covenant: {}", covenant.covenant_type);
-                }
-            }
-            println!();
-        },
-        Err(e) => {
-            println!("⚠️ Transaction analysis failed: {}", e);
-        }
-    }
-    
-    Ok(())
-}
 
 async fn auto_demo(amount: Option<u64>, delay: Option<u32>, scenario: &str) -> Result<()> {
     // Load environment variables
@@ -986,17 +909,6 @@ async fn auto_demo(amount: Option<u64>, delay: Option<u32>, scenario: &str) -> R
     let vault_utxo = OutPoint::new(funding_txid, vault_vout);
     println!("📦 Vault UTXO: {}:{}", funding_txid, vault_vout);
     
-    // Decode funding transaction
-    println!("🔍 Analyzing funding transaction...");
-    if let Ok(funding_tx_verbose) = rpc.get_raw_transaction_verbose(&funding_txid) {
-        if let Some(funding_hex) = funding_tx_verbose["hex"].as_str() {
-            if let Ok(funding_tx_bytes) = hex::decode(funding_hex) {
-                if let Ok(funding_tx) = bitcoin::consensus::deserialize::<bitcoin::Transaction>(&funding_tx_bytes) {
-                    let _ = decode_and_display_transaction(&funding_tx, "Vault Funding");
-                }
-            }
-        }
-    }
     
     println!();
 
@@ -1015,8 +927,6 @@ async fn auto_demo(amount: Option<u64>, delay: Option<u32>, scenario: &str) -> R
     let trigger_txid = rpc.send_raw_transaction_hex(&trigger_hex)?;
     println!(" ✅ Broadcast successful");
     
-    // Decode trigger transaction
-    let _ = decode_and_display_transaction(&trigger_tx, "Vault Trigger");
 
     // Wait for confirmation
     print!("⏳ Waiting for trigger confirmation...");
@@ -1091,8 +1001,6 @@ async fn execute_cold_clawback(
     let cold_txid = rpc.send_raw_transaction_hex(&cold_hex)?;
     println!(" ✅ Broadcast successful");
     
-    // Decode cold clawback transaction
-    let _ = decode_and_display_transaction(&cold_tx, "Cold Clawback");
 
     // Wait for confirmation
     print!("⏳ Waiting for cold clawback confirmation...");
@@ -1173,8 +1081,6 @@ async fn execute_hot_withdrawal(
     let hot_txid = rpc.send_raw_transaction_hex(&hot_hex)?;
     println!(" ✅ Broadcast successful");
     
-    // Decode hot withdrawal transaction
-    let _ = decode_and_display_transaction(&hot_tx, "Hot Withdrawal");
 
     // Wait for confirmation
     print!("⏳ Waiting for hot withdrawal confirmation...");

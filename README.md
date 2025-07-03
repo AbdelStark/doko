@@ -1,401 +1,361 @@
-# Doko - Bitcoin Taproot Vault POC with CTV + CSFS
+# Doko: Bitcoin Vault Implementation with Taproot and CTV
 
-A proof-of-concept implementation of Bitcoin vaults using **Taproot (P2TR)**, **OP_CHECKTEMPLATEVERIFY**, and **OP_CHECKSIGFROMSTACK** on Mutinynet.
+A Bitcoin vault implementation using Taproot (P2TR) addresses and OP_CHECKTEMPLATEVERIFY (CTV) covenants. Designed for the Mutinynet signet with CTV support.
 
-## ✨ Features
+## Architecture
 
-- **🎯 Taproot Vaults**: Modern P2TR addresses with script-path covenant enforcement
-- **🔒 CTV Covenants**: Predetermined transaction templates without presigned data
-- **⏰ Time-Delayed Withdrawals**: Configurable CSV delay for hot wallet spending  
-- **🚨 Emergency Clawback**: Immediate recovery to cold storage bypassing delays
-- **🎮 Interactive Demo**: Step-by-step guided demonstration with real transactions
-- **🌐 Mutinynet Ready**: Tested on CTV/CSFS-enabled Signet with real Bitcoin transactions
+### Vault Structure
 
-## 🏗️ Taproot Vault Architecture
+The vault implements a three-stage Bitcoin custody system with covenant enforcement:
 
 ```
-                    🏦 VAULT LIFECYCLE FLOW
-                    
-┌─────────────────────────────────────────────────────────────────┐
-│                        STEP 1: DEPOSIT                         │
-└─────────────────────────────────────────────────────────────────┘
-
-         Fund with Bitcoin
-              │
-              ▼
-    ┌─────────────────┐     📍 Taproot P2TR Address
-    │   Vault UTXO    │     🔒 CTV Script: <trigger_hash> OP_CTV
-    │ (Taproot P2TR)  │     🔑 NUMS Internal Key (no key-path spend)
-    └─────────┬───────┘
-              │ Anyone can trigger (script-path spend)
-              ▼
-
-┌─────────────────────────────────────────────────────────────────┐
-│                       STEP 2: TRIGGER                          │  
-└─────────────────────────────────────────────────────────────────┘
-
-    ┌─────────────────┐     🚀 Broadcasts Trigger Transaction
-    │   Trigger TX    │     ✅ CTV validates exact template match
-    │ (CTV-enforced)  │     💸 Fee: ~1000 sats
-    └─────────┬───────┘
-              │
-              ▼
-    ┌─────────────────┐     📍 Taproot P2TR Address  
-    │  Trigger UTXO   │     🔀 Script: IF <csv> CSV <hot_key> CHECKSIG
-    │ (Conditional)   │            ELSE <cold_hash> CTV ENDIF
-    └─────┬─────┬─────┘
-          │     │
-          │     └─────────────────────────┐
-          ▼                               ▼
-
-┌─────────────────────────────────────────────────────────────────┐
-│                    STEP 3A: HOT PATH                           │
-└─────────────────────────────────────────────────────────────────┘
-
-    ┌──────────────┐        ⏰ Wait CSV Delay (e.g., 144 blocks)
-    │  🔥 Hot Path │        🔑 Requires Hot Key Signature  
-    │   N blocks   │        📨 Sequence: CSV delay value
-    │ + signature  │        💸 Fee: ~1000 sats
-    └──────┬───────┘        
-           │
-           ▼
-    ┌──────────────┐        📍 Hot Wallet P2TR Address
-    │ Hot Wallet   │        ✅ Normal withdrawal complete
-    │  (Final)     │
-    └──────────────┘
-
-┌─────────────────────────────────────────────────────────────────┐
-│                   STEP 3B: COLD PATH                           │
-└─────────────────────────────────────────────────────────────────┘
-
-    ┌──────────────┐        🚨 EMERGENCY RESPONSE
-    │ ❄️ Cold Path │        ⚡ Immediate (no delay)
-    │  Immediate   │        🔒 CTV enforced template
-    │ CTV sweep    │        💸 Fee: ~1000 sats  
-    └──────┬───────┘
-           │
-           ▼
-    ┌──────────────┐        📍 Cold Wallet P2TR Address
-    │ Cold Storage │        🛡️ Funds secured from attack
-    │  (Emergency) │
-    └──────────────┘
+┌──────────────┐    CTV     ┌──────────────┐    IF/ELSE    ┌──────────────┐
+│    Vault     │ ────────► │   Trigger    │ ────────────► │  Final       │
+│   (P2TR)     │           │   (P2TR)     │               │ Destination  │
+└──────────────┘           └──────────────┘               └──────────────┘
+   Covenant                   Conditional                      Hot or Cold
+   Protection                 Spending                        Wallet
 ```
 
-## 📖 How the Vault Works
+### Script Construction
 
-### 🔐 Security Model
+#### 1. Vault Deposit Script
 
-The Doko vault provides **covenant-enforced custody** with these security guarantees:
+**Location**: Taproot script tree leaf  
+**Purpose**: Enforces predetermined spending path via CTV covenant
 
-- **🛡️ Covenant Protection**: CTV prevents unauthorized transaction templates
-- **⏰ Time-Based Defense**: Hot withdrawals require waiting period for monitoring
-- **🚨 Emergency Recovery**: Cold clawback bypasses delays for immediate response
-- **🎯 Taproot Privacy**: Script details only revealed when spending
+```
+<32-byte_trigger_hash> OP_CHECKTEMPLATEVERIFY
+```
 
-### 📋 Detailed Flow Explanation
+**Properties**:
+- Only allows spending by transactions matching the committed template
+- Template hash computed using BIP-119 specification
+- No private key required for spending (covenant-based authorization)
 
-#### Step 1: Vault Creation & Funding 🏦
+#### 2. Trigger Script  
 
-1. **Generate Keys**: Create hot, cold, and vault keypairs (X-only for Taproot)
-2. **Build Scripts**: 
-   - **Vault Script**: `<trigger_hash> OP_CHECKTEMPLATEVERIFY`
-   - **Trigger Script**: `IF <csv_delay> CSV <hot_key> CHECKSIG ELSE <cold_hash> CTV ENDIF`
-3. **Create Address**: Taproot P2TR address with NUMS internal key + CTV script leaf
-4. **Fund Vault**: Send Bitcoin to the vault address
+**Location**: Taproot script tree leaf  
+**Purpose**: Provides two spending paths with different requirements
 
-**Key Properties:**
-- Vault can **only** be spent by the predetermined trigger transaction
-- NUMS point ensures **no key-path spending** (script-path only)
-- All spending paths are **predetermined and verifiable**
+```
+OP_IF
+    <csv_delay> OP_CHECKSEQUENCEVERIFY OP_DROP
+    <hot_pubkey> OP_CHECKSIG
+OP_ELSE
+    <32-byte_cold_hash> OP_CHECKTEMPLATEVERIFY
+OP_ENDIF
+```
 
-#### Step 2: Trigger Transaction (Unvault Initiation) 🚀
+**Hot Path (IF branch)**:
+- Requires waiting `csv_delay` blocks (BIP68 relative timelock)
+- Requires signature from hot private key
+- Sequence value must be ≥ `csv_delay`
 
-**Who can trigger?** Anyone! The vault owner, an attacker, or any third party.
+**Cold Path (ELSE branch)**:
+- Immediate spending (no delay)
+- CTV covenant enforces exact recovery transaction
+- No signature required
 
-**What happens:**
-1. **Script-Path Spend**: Uses CTV script leaf from vault Taproot tree
-2. **Template Validation**: OP_CTV verifies exact transaction structure
-3. **Funds Move**: Vault UTXO → Trigger UTXO (with conditional script)
+### Taproot Implementation
 
-**Security Note:** Triggering doesn't steal funds - it just starts the unvault process!
+#### Address Generation
 
-#### Step 3A: Hot Path (Normal Withdrawal) 🔥
+**Internal Key**: NUMS point (`50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0`)
+- Well-known point with no known discrete logarithm
+- Prevents key-path spending, forcing script-path usage
+- Same NUMS point used throughout Bitcoin ecosystem
 
-**Requirements:**
-- ✅ **Time Delay**: Must wait CSV blocks (e.g., 144 blocks ≈ 24 hours)
-- ✅ **Hot Signature**: Valid signature from hot private key
-- ✅ **Correct Sequence**: Transaction input sequence ≥ CSV delay
+**Script Tree**: Single-leaf configuration
+- Vault address: Contains CTV script only
+- Trigger address: Contains conditional IF/ELSE script only
 
-**Process:**
-1. **Wait Period**: Monitor for emergency situations during CSV delay
-2. **Sign Transaction**: Use hot private key to authorize withdrawal
-3. **Final Destination**: Funds go to hot wallet P2TR address
+#### Witness Structure
 
-**Witness Stack:** `[<hot_signature>, TRUE, <trigger_script>, <control_block>]`
+**Vault spending** (CTV script):
+```
+Witness: [<script>, <control_block>]
+```
 
-#### Step 3B: Cold Path (Emergency Recovery) ❄️
+**Trigger hot spending** (IF branch):
+```
+Witness: [<signature>, <true>, <script>, <control_block>]
+```
 
-**Requirements:**
-- ✅ **CTV Template Match**: Transaction must exactly match cold template
-- ✅ **No Delay**: Can execute immediately (sequence = 0)
-- ✅ **No Signature**: CTV covenant provides authorization
+**Trigger cold spending** (ELSE branch):
+```
+Witness: [<false>, <script>, <control_block>]
+```
 
-**Process:**
-1. **Immediate Response**: No waiting period required
-2. **Template Enforcement**: CTV ensures predetermined cold destination
-3. **Emergency Complete**: Funds secured in cold wallet
+## Transaction Flow
 
-**Witness Stack:** `[FALSE, <trigger_script>, <control_block>]`
+### 1. Vault Creation
 
-### 🛡️ Attack Scenarios & Responses
+Generate three key pairs:
+- **Vault keys**: Used in script construction (not for signing)
+- **Hot keys**: Required for normal withdrawals after delay
+- **Cold keys**: Used for emergency recovery destination
 
-| Attack Vector | Vault Response | Outcome |
-|---|---|---|
-| **🔴 Hot Key Compromised** | Attacker triggers → Owner executes cold clawback | ✅ **Funds Safe** |
-| **🔴 Unauthorized Unvault** | CTV enforces only valid templates | ✅ **Attack Blocked** |  
-| **🔴 Direct Vault Spend** | Only trigger template accepted by CTV | ✅ **Attack Blocked** |
-| **🔴 Cold Path Bypass** | CTV enforces exact cold destination | ✅ **Attack Blocked** |
-| **🔴 Transaction Malleability** | Taproot + CTV prevent modification | ✅ **Attack Blocked** |
+Compute transaction templates:
+- **Trigger transaction**: Vault → Trigger output
+- **Cold transaction**: Trigger → Cold wallet
 
-### 🎯 Key Advantages
+Create Taproot addresses:
+- **Vault address**: P2TR with CTV script leaf
+- **Trigger address**: P2TR with conditional script leaf
 
-- **No Presigned Transactions**: Everything reconstructed from parameters
-- **Deterministic Recovery**: Vault state derivable from configuration
-- **Covenant Enforcement**: Consensus rules prevent unauthorized spends
-- **Taproot Efficiency**: Modern Bitcoin address format with privacy
-- **Emergency Responsive**: Immediate recovery without complex procedures
+### 2. Funding
 
-## 🚀 Quick Start
+Send Bitcoin to the vault address. Funds are immediately protected by CTV covenant - can only be spent by the predetermined trigger transaction.
 
-### 1. Create a New Vault
+### 3. Unvault Initiation (Trigger)
+
+**Who can trigger**: Anyone (vault owner, attacker, or third party)  
+**Process**: 
+1. Construct trigger transaction matching CTV template
+2. Create script-path witness with vault script and control block
+3. Broadcast transaction
+
+**Result**: Funds move to trigger output with conditional spending paths
+
+### 4A. Normal Withdrawal (Hot Path)
+
+**Requirements**:
+- Wait for CSV delay period
+- Sign transaction with hot private key
+- Set transaction sequence to CSV delay value
+
+**Process**:
+1. Monitor trigger output during delay period
+2. After delay expires, construct hot withdrawal transaction
+3. Create witness with hot signature and TRUE flag
+4. Broadcast transaction
+
+**Result**: Funds transferred to hot wallet
+
+### 4B. Emergency Recovery (Cold Path)
+
+**Requirements**:
+- Transaction must match cold CTV template exactly
+- No delay or signature required
+
+**Process**:
+1. Construct cold recovery transaction matching template
+2. Create witness with FALSE flag (takes ELSE branch)
+3. Broadcast transaction immediately
+
+**Result**: Funds transferred to cold wallet, bypassing delay
+
+## Security Model
+
+### Threat Scenarios
+
+| Threat | Mitigation | Outcome |
+|--------|------------|---------|
+| Hot key compromise | Attacker can trigger, owner executes cold clawback | Funds recovered |
+| Unauthorized unvault | CTV prevents non-matching transactions | Attack blocked |
+| Direct vault theft | Only trigger template accepted by CTV | Attack blocked |
+| Cold path manipulation | CTV enforces exact destination | Attack blocked |
+| Transaction malleability | Taproot + CTV prevent modifications | Attack blocked |
+
+### Design Properties
+
+**Covenant Enforcement**: CTV ensures only predetermined transaction structures can spend outputs
+
+**Time-Based Security**: CSV creates response window for detecting unauthorized activity
+
+**Emergency Response**: Cold path provides immediate recovery without complex procedures
+
+**Privacy**: Taproot hides script details until spending occurs
+
+**Deterministic Recovery**: All transactions reconstructable from vault configuration
+
+## Implementation
+
+### Core Components
+
+- **`TaprootVault`**: Main vault implementation with script generation
+- **Script Construction**: Bitcoin script building using `bitcoin` crate
+- **CTV Hash Computation**: BIP-119 compliant template hashing
+- **Transaction Building**: Full transaction construction with proper witnesses
+- **RPC Integration**: Bitcoin Core communication for transaction broadcast
+
+### Key Functions
+
+#### `ctv_vault_deposit_script()`
+Constructs CTV script for vault deposits:
+```rust
+fn ctv_vault_deposit_script(&self) -> Result<ScriptBuf> {
+    let ctv_hash = self.compute_ctv_hash()?;
+    Ok(Builder::new()
+        .push_slice(ctv_hash)
+        .push_opcode(OP_NOP4) // OP_CHECKTEMPLATEVERIFY
+        .into_script())
+}
+```
+
+#### `vault_trigger_script()`
+Constructs conditional script for trigger outputs:
+```rust
+fn vault_trigger_script(&self) -> Result<ScriptBuf> {
+    let hot_xonly = XOnlyPublicKey::from_str(&self.hot_pubkey)?;
+    let cold_ctv_hash = self.compute_cold_ctv_hash()?;
+    
+    Ok(Builder::new()
+        .push_opcode(OP_IF)
+            .push_int(self.csv_delay as i64)
+            .push_opcode(OP_CSV)
+            .push_opcode(OP_DROP)
+            .push_x_only_key(&hot_xonly)
+            .push_opcode(OP_CHECKSIG)
+        .push_opcode(OP_ELSE)
+            .push_slice(cold_ctv_hash)
+            .push_opcode(OP_NOP4) // OP_CHECKTEMPLATEVERIFY
+        .push_opcode(OP_ENDIF)
+        .into_script())
+}
+```
+
+#### `compute_ctv_hash()`
+Implements BIP-119 CTV hash computation:
+```rust
+fn compute_ctv_hash(&self) -> Result<[u8; 32]> {
+    let trigger_tx = self.create_trigger_tx_template()?;
+    
+    let mut data = Vec::new();
+    trigger_tx.version.consensus_encode(&mut data)?;
+    trigger_tx.lock_time.consensus_encode(&mut data)?;
+    
+    // Encode sequences, outputs, and input index per BIP-119
+    // ... (detailed implementation)
+    
+    let hash = sha256::Hash::hash(&data);
+    Ok(hash.to_byte_array())
+}
+```
+
+### Network Configuration
+
+**Mutinynet Connection**:
+- RPC Host: `127.0.0.1:38332`
+- Network: Bitcoin Signet
+- CTV Support: OP_NOP4 mapped to OP_CHECKTEMPLATEVERIFY
+- Block Time: ~30 seconds
+
+## Usage
+
+### Command Line Interface
 
 ```bash
-./target/debug/doko create-vault
+# Create new vault
+cargo run -- create-vault --amount 100000 --delay 144
+
+# Run automated demonstration
+cargo run -- auto-demo --scenario cold
+
+# Launch interactive TUI
+cargo run -- dashboard
 ```
 
-This generates:
-- Hot and cold keypairs
-- Vault deposit address
-- Transaction templates
-- Saves configuration to `vault_plan.json`
+### Programmatic Usage
 
-**Default settings:**
-- Amount: 10,000 sats (0.0001 BTC)
-- CSV Delay: 10 blocks (~5 minutes on Mutinynet)
+```rust
+use doko::TaprootVault;
 
-### 2. Run Interactive Demo
+// Create vault with 0.001 BTC and 24-block delay
+let vault = TaprootVault::new(100_000, 24)?;
 
-```bash
-./target/debug/doko demo
+// Get deposit address
+let vault_address = vault.get_vault_address()?;
+
+// Create and broadcast trigger transaction
+let trigger_tx = vault.create_trigger_tx(vault_utxo)?;
+
+// Emergency clawback
+let cold_tx = vault.create_cold_tx(trigger_utxo)?;
 ```
 
-The demo will guide you through:
+## Testing
 
-#### Step 1: Fund the Vault
-- Shows vault address to fund
-- Provides exact bitcoin-cli command
-- Waits for funding confirmation
-- Prompts for funding TXID and VOUT
+### Automated Demo
 
-#### Step 2: Choose Demo Scenario
-1. **🔥 Normal Hot Withdrawal**: Experience the full time-delayed withdrawal process
-2. **❄️ Emergency Cold Clawback**: Simulate attack detection and immediate recovery  
-3. **📊 Transaction Details**: View all transaction templates without broadcasting
+The automated demo provides complete vault flow testing:
 
-#### Demo Features:
-- ✅ **Step-by-step guidance** with clear instructions
-- ✅ **Ready-to-broadcast transactions** with exact hex
-- ✅ **Copy-paste bitcoin-cli commands** for transaction broadcasting
-- ✅ **Interactive prompts** for funding and confirmations
-- ✅ **Real UTXO tracking** using your actual funding transaction
-- ✅ **Multiple scenario support** (normal vs emergency flows)
+1. **Vault Creation**: Generates keys and addresses
+2. **RPC Funding**: Creates funding transaction via Bitcoin Core
+3. **Trigger Broadcast**: Initiates unvault process
+4. **Recovery Path**: Demonstrates either hot or cold withdrawal
 
-## 🛠️ Build from Source
+### TUI Dashboard
+
+Interactive terminal interface with:
+- Real-time blockchain monitoring
+- Transaction broadcasting capabilities
+- Balance tracking across addresses
+- Session transcript generation
+
+## Technical Specifications
+
+### Dependencies
+
+- **Rust**: 1.70+
+- **bitcoin**: 0.31+ (Bitcoin protocol implementation)
+- **secp256k1**: Cryptographic operations
+- **ratatui**: Terminal user interface
+- **tokio**: Async runtime
+
+### Constants
+
+```rust
+const DEFAULT_FEE_SATS: u64 = 1_000;      // Per-transaction fee
+const HOT_FEE_SATS: u64 = 2_000;          // Total hot path fees
+const DEFAULT_CSV_DELAY: u32 = 4;         // Production: 144+ blocks
+const DEFAULT_DEMO_AMOUNT: u64 = 5_000;   // Demo vault amount
+```
+
+### Fee Structure
+
+- **Vault → Trigger**: 1,000 sats
+- **Trigger → Final**: 1,000 sats  
+- **Total Cost**: 2,000 sats for complete withdrawal
+
+## Limitations
+
+### Current Implementation
+
+- **Single UTXO**: Vault holds one UTXO per configuration
+- **Fixed Amounts**: CTV templates commit to exact values
+- **Signet Only**: Requires CTV-enabled network
+- **Demo Focus**: Optimized for demonstration and testing
+
+### Production Considerations
+
+- **Key Management**: Implement secure key derivation (BIP32)
+- **Fee Estimation**: Dynamic fee calculation based on network conditions
+- **Error Handling**: Comprehensive transaction validation
+- **Recovery Procedures**: Documented emergency protocols
+
+## Build Instructions
 
 ```bash
 # Clone repository
-git clone https://github.com/AbdelStark/doko.git
+git clone https://github.com/your-repo/doko.git
 cd doko
 
-# Build
-cargo build
+# Build release version
+cargo build --release
 
 # Run tests
 cargo test
+
+# Run with logging
+RUST_LOG=debug cargo run -- dashboard
 ```
 
-## 🌐 Mutinynet Setup
+## License
 
-The vault is designed for **Mutinynet** - a custom signet with CTV/CSFS support.
-
-### Connection Details:
-- **RPC URL**: `34.10.114.163:38332`
-- **RPC User**: `catnet`
-- **RPC Password**: `stark`
-- **Network**: Signet
-
-### Bitcoin Core Configuration:
-```bash
-# Connect to Mutinynet
-bitcoin-cli -signet -rpcconnect=34.10.114.163:38332 -rpcuser=catnet -rpcpassword=stark getblockchaininfo
-```
-
-## 📋 Commands
-
-| Command | Description |
-|---------|-------------|
-| `create-vault` | Generate new vault with keypairs and address |
-| `demo` | Interactive demonstration of vault flows |
-| `fund-vault` | Fund vault with specific UTXO (planned) |
-| `unvault` | Initiate unvault process (planned) |
-| `clawback` | Emergency sweep to cold wallet (planned) |
-| `to-hot` | Complete hot withdrawal after delay (planned) |
-
-## 📄 Example Demo Session
-
-```bash
-$ ./target/debug/doko demo
-
-🏦 Doko Taproot Vault Demo - Milestone 1 (CTV + Taproot)
-
-📋 Vault Configuration:
-  Amount: 100000 sats (0.001 BTC)
-  CSV Delay: 144 blocks
-  Network: Signet
-
-🔐 Generated Keys (X-only for Taproot):
-  Vault Public Key:  7477459bc4e68340059f3aab1792bc209dc2d653a535a7a09a9fde5cfbdbc897
-  Hot Public Key:    58207d8b2b2db9c87c097d281c807cf3e10fe480eecf29fdf473670cd7dc4bb3
-  Cold Public Key:   c152f538bdcc2d8dceb5f82b19ff8a59bc48587e0cbe8fa5131ed4f210d6ee63
-
-🏛️  Vault Address (Taproot): tb1pkw0x7qsu5hjfypl05w52ncv6dgsarm97tm2h0v7qa20r79hf0luqn3dty6
-
-📜 Taproot Script Analysis:
-  Trigger Address:  tb1pumry9hfgms50hks27eyesxr5jh8psm0k8mwpmkta3w7rrtw6cpwstf6p9v
-
-┌────────────────────────────────────────────────────────────────┐
-│                          STEP 1: FUND VAULT                   │
-└────────────────────────────────────────────────────────────────┘
-
-💰 Send exactly 100000 sats to this vault address:
-   📍 tb1pkw0x7qsu5hjfypl05w52ncv6dgsarm97tm2h0v7qa20r79hf0luqn3dty6
-
-You can fund this vault using:
-• Bitcoin Core CLI: bitcoin-cli -signet sendtoaddress tb1pkw0x7qsu5hjfypl05w52ncv6dgsarm97tm2h0v7qa20r79hf0luqn3dty6 0.001
-• Any signet-compatible wallet
-• Signet faucet (if available)
-
-✋ Have you sent the funds? (y/n): y
-
-🔍 Please provide the funding transaction details:
-   Enter TXID: 365b8e86451fc539c74ad0f0a02b2589ed2b8fb9bad8008f5f31195ae02b9003
-   Enter VOUT (usually 0): 0
-
-✅ Vault funded with UTXO: 365b8e86451fc539c74ad0f0a02b2589ed2b8fb9bad8008f5f31195ae02b9003:0
-
-┌────────────────────────────────────────────────────────────────┐
-│                     STEP 2: CHOOSE DEMO FLOW                  │
-└────────────────────────────────────────────────────────────────┘
-
-Select which vault scenario to demonstrate:
-  1. 🔥 Normal Hot Withdrawal (wait 144 blocks then withdraw)
-  2. ❄️  Emergency Cold Clawback (immediate recovery)
-  3. 📊 Show transaction details only
-
-Choose option (1-3): 2
-
-❄️ EMERGENCY COLD CLAWBACK DEMO
-═══════════════════════════════════
-
-Step 1: Broadcasting Unvault Transaction
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-⚠️  Simulating: Attacker initiates unvault
-
-📄 Trigger Transaction Details:
-   TXID: c778131a439cc54d5bd46e77fc4b6cd45890b80357b704e1f01a348db62fed3f
-   Input: 365b8e86451fc539c74ad0f0a02b2589ed2b8fb9bad8008f5f31195ae02b9003:0
-   Output: 99000 sats to trigger script
-
-🚀 Broadcast using: bitcoin-cli -signet sendrawtransaction 0200000000010103902be05a19315f8f00d8bab98f2bed89252ba0f0d04ac739c51f45868e5b360000000000fdffffff01b882010000000000225120e6c642dd28dc28fbda0af64998187495ce186df63edc1dd97d8bbc31addac05d022220c608d3bbdc91fefa05a19874f5d23856492b603bf2bcabb278e5f049a6262dcbb321c050929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac000000000
-
-Step 2: Emergency Cold Clawback
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🚨 DETECTED UNAUTHORIZED UNVAULT!
-🏃‍♂️ Immediately sweeping to cold storage...
-
-📄 Cold Clawback Transaction Details:
-   TXID: e360c352401e2e1aeb8a2498276d6cb4efca14e0a8bf401d0c5a9d923a0759ae
-   Input: c778131a439cc54d5bd46e77fc4b6cd45890b80357b704e1f01a348db62fed3f:0
-   Output: 98000 sats to cold address
-
-🚀 Broadcast using: bitcoin-cli -signet sendrawtransaction 020000000001013fed2fb68d341af0e104b75703b89058d46c4bfc776ed45b4dc59c431a1378c700000000000000000001d07e010000000000225120c152f538bdcc2d8dceb5f82b19ff8a59bc48587e0cbe8fa5131ed4f210d6ee6303004c63029000b2752058207d8b2b2db9c87c097d281c807cf3e10fe480eecf29fdf473670cd7dc4bb3ac67209531722efa9644ee56b4b19549bc16d0aabd83cb9b4eb24ed9ef34b7b14758bfb36821c150929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac000000000
-
-✅ Emergency clawback complete! Funds are safe in cold storage.
-⚡ No waiting period required - CTV allows immediate recovery!
-```
-
-## 🔐 Security Properties
-
-✅ **Covenant Enforcement**: Vault can only spend to predetermined paths  
-✅ **Time-based Protection**: Hot spending requires configurable delay  
-✅ **Emergency Recovery**: Immediate clawback bypasses delay  
-✅ **No Signing Required**: Unvault initiation doesn't need private keys  
-✅ **Deterministic**: All transactions reconstructable from vault plan  
-
-## 🎯 Current Status
-
-**✅ Milestone 1 Complete**: Taproot CTV Vault Implementation
-- ✅ **Taproot P2TR Addresses**: Modern Bitcoin address format with script trees
-- ✅ **CTV Covenant Enforcement**: BIP-119 compliant template verification
-- ✅ **Time-Delayed Withdrawals**: CSV relative timelock implementation
-- ✅ **Emergency Clawback**: Immediate cold storage recovery
-- ✅ **Interactive Demo**: Real transaction broadcasting on Mutinynet
-- ✅ **Production Testing**: Successfully tested with real Bitcoin transactions
-- ✅ **Comprehensive Documentation**: Full code comments and flow explanations
-
-**🚧 Milestone 2 Planned**: CSFS Integration & Advanced Features
-- 🔄 **OP_CHECKSIGFROMSTACK**: Manager approval signatures
-- 🔄 **Dynamic Conditions**: Programmable spending policies  
-- 🔄 **Multi-Party Authorization**: Threshold signature requirements
-- 🔄 **Web Interface**: Browser-based vault management
-- 🔄 **Advanced Recovery**: Multi-path emergency scenarios
-
-## 📚 Technical Details
-
-### Core Implementation
-- **Language**: Rust 🦀
-- **Bitcoin Library**: `bitcoin` crate v0.31+ 
-- **Address Format**: Taproot P2TR (bech32m)
-- **Script Trees**: Single-leaf Taproot with CTV scripts
-- **Key Generation**: X-only public keys (BIP-340)
-
-### Covenant Technology  
-- **CTV Implementation**: BIP-119 compliant template hashing
-- **Internal Key**: NUMS point (cryptographically verifiable no-key)
-- **Script Execution**: Script-path spending only (no key-path)
-- **Witness Construction**: Taproot control blocks + script reveals
-
-### Network & Testing
-- **Primary Network**: Mutinynet (Signet with CTV/CSFS)
-- **Opcodes**: OP_NOP4 (OP_CHECKTEMPLATEVERIFY)
-- **Block Times**: ~30 seconds (fast testing)
-- **Transaction Types**: Version 2 (BIP68 compatible)
-
-### Security Features
-- **Covenant Enforcement**: Consensus-level spending restrictions
-- **Time-Based Security**: CSV relative timelocks  
-- **Emergency Recovery**: Immediate bypass mechanisms
-- **Deterministic Recovery**: Reproducible from configuration
-- **Taproot Privacy**: Scripts hidden until spending
-
-## 🤝 Contributing
-
-This is a proof-of-concept for educational and research purposes. Contributions welcome!
-
-## ⚖️ License
-
-MIT License - see LICENSE file for details.
+MIT License
 
 ---
 
-**⚠️ Warning**: This is experimental software for testing purposes only. Do not use with real funds on mainnet.
+**Disclaimer**: This is experimental software for educational and research purposes. Do not use with real funds on Bitcoin mainnet.
