@@ -85,7 +85,7 @@ enum Commands {
         #[arg(short, long)]
         delay: Option<u32>,
         /// Demo scenario: cold, emergency, delegated, timelock, cold-recovery
-        #[arg(short, long, default_value = "cold")]
+        #[arg(short, long, default_value = "cold-recovery")]
         scenario: String,
         /// Vault implementation type
         #[arg(long, default_value = "simple")]

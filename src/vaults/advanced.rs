@@ -59,6 +59,11 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, str::FromStr};
 use rand::thread_rng;
 
+// Mutinynet CSFS opcodes (not in standard bitcoin crate yet)
+// Based on Mutinynet's implementation, these are the actual opcode values
+const OP_CHECKSIGFROMSTACK_BYTE: u8 = 0xc1;        // 193 in decimal
+const OP_CHECKSIGFROMSTACKVERIFY_BYTE: u8 = 0xc2;  // 194 in decimal
+
 /// Role enumeration for vault access control.
 ///
 /// Defines the two primary roles in the corporate treasury model:
@@ -382,24 +387,32 @@ impl AdvancedTaprootVault {
                 .push_opcode(OP_CHECKSIG)
             .push_opcode(OP_ELSE)
                 .push_opcode(OP_IF)
-                    // Delegated operations: Requires both delegation proof (CSFS) and operations signature
-                    // BIP-348 CSFS stack order (top to bottom): pubkey, message, signature
-                    // Initial witness stack order: [ops_sig, delegation_sig, delegation_msg, 0, 1]
-                    // After OP_IF: [ops_sig, delegation_sig, delegation_msg]
+                    // CSFS delegated operations with proper BIP-348 implementation
+                    // Witness stack: [ops_sig, delegation_sig, delegation_msg, 1, 0]
+                    // After IFs: [ops_sig, delegation_sig, delegation_msg]
                     
-                    // BIP-348 CSFS expects exactly: [signature, message, pubkey] from top to bottom
-                    // Current stack: [ops_sig, delegation_sig, delegation_msg]
-                    // We need: [delegation_sig, delegation_msg, treasurer_pubkey]
-                    .push_opcode(OP_ROT)                // Move ops_sig to bottom: [delegation_sig, delegation_msg, ops_sig]
-                    .push_x_only_key(&treasurer_xonly)  // Add treasurer pubkey: [delegation_sig, delegation_msg, ops_sig, treasurer_pubkey]
-                    .push_opcode(OP_SWAP)               // Swap to get correct order: [delegation_sig, delegation_msg, treasurer_pubkey, ops_sig]
-                    .push_opcode(OP_NOP4)               // OP_CHECKSIGFROMSTACK - consumes top 3 items, pushes 1 if valid
-                    // Stack is now: [csfs_result, ops_sig] - CSFS result and ops_sig
-                    .push_opcode(OP_VERIFY)             // Verify CSFS result, pops it, leaves [ops_sig]
+                    // Verify delegation signature with Mutinynet CSFS
+                    // Current: [ops_sig, delegation_sig, delegation_msg]
+                    // Mutinynet CSFS expects: [delegation_sig, delegation_msg, treasurer_pubkey]
+                    // Clean approach using minimal stack operations
                     
-                    // Then verify operations manager signature on transaction
-                    .push_x_only_key(&operations_xonly) // Push operations pubkey: [ops_sig, ops_pubkey]
-                    .push_opcode(OP_CHECKSIG)           // Verify ops signature, consumes both, pushes result
+                    // Move ops_sig to the bottom: [delegation_sig, delegation_msg, ops_sig]
+                    .push_opcode(OP_ROT)                
+                    // Add treasurer pubkey: [delegation_sig, delegation_msg, ops_sig, treasurer_pubkey]
+                    .push_x_only_key(&treasurer_xonly)  
+                    // Move ops_sig after treasurer_pubkey: [delegation_sig, delegation_msg, treasurer_pubkey, ops_sig]
+                    .push_opcode(OP_SWAP)               
+                    // Now stack is: [delegation_sig, delegation_msg, treasurer_pubkey, ops_sig]
+                    // CSFS consumes top 3: [delegation_sig, delegation_msg, treasurer_pubkey]
+                    // Leaving: [ops_sig]
+                    
+                    .push_slice(&[OP_CHECKSIGFROMSTACKVERIFY_BYTE]) // Use Mutinynet CSFS opcode
+                    // CSFS consumes [delegation_sig, delegation_msg, treasurer_pubkey] and verifies
+                    // If verification fails, script stops. If success, continues with [ops_sig]
+                    
+                    // Then verify operations signature
+                    .push_x_only_key(&operations_xonly) // [ops_sig, ops_pubkey]
+                    .push_opcode(OP_CHECKSIG)           // Verify ops signature
                     
                 .push_opcode(OP_ELSE)
                     .push_opcode(OP_IF)
@@ -1100,11 +1113,14 @@ impl AdvancedTaprootVault {
 
         let mut witness = Witness::new();
         // Witness stack for CSFS delegated path:
-        witness.push(operations_signature.as_ref());   // Operations signature for final CHECKSIG
+        // For Taproot script path CHECKSIG, we need to append the sighash type byte
+        let mut ops_sig_with_sighash = operations_signature.as_ref().to_vec();
+        ops_sig_with_sighash.push(TapSighashType::Default as u8);
+        witness.push(&ops_sig_with_sighash);           // Operations signature for final CHECKSIG
         witness.push(&delegation_sig_bytes);           // Delegation signature for CSFS verification
         witness.push(&delegation_message_hash);        // Delegation message for CSFS verification
+        witness.push([1]); // True for second IF (delegated path)  
         witness.push([]); // False for first IF (not emergency path)
-        witness.push([1]); // True for second IF (delegated path)
         witness.push(trigger_script.as_bytes());
         witness.push(
             spend_info
