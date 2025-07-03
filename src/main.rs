@@ -11,7 +11,6 @@ mod explorer_client;
 mod rpc_client;
 mod taproot_vault;
 mod ui;
-mod utils;
 
 use rpc_client::MutinynetClient;
 use taproot_vault::TaprootVault;

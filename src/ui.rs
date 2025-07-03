@@ -8,13 +8,9 @@ use crate::config::{files, vault as vault_config};
 use crate::error::VaultResult;
 use crate::explorer_client::MutinynetExplorer;
 use anyhow::Result;
-use arboard::Clipboard;
 use bitcoin::{OutPoint, Txid};
 use crossterm::{
-    event::{
-        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseButton,
-        MouseEventKind,
-    },
+    event::{self, Event, KeyCode, KeyEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -33,10 +29,6 @@ use crate::{rpc_client::MutinynetClient, taproot_vault::TaprootVault};
 
 /// Mutinynet block explorer utilities
 mod explorer {
-    /// Generate Mutinynet explorer URL for an address
-    pub fn address_url(address: &str) -> String {
-        format!("https://mutinynet.com/address/{}", address)
-    }
 
     /// Generate Mutinynet explorer URL for a transaction
     pub fn tx_url(txid: &str) -> String {
@@ -62,21 +54,6 @@ mod explorer {
     }
 }
 
-/// Clickable area in the UI
-#[derive(Debug, Clone)]
-pub struct ClickableArea {
-    pub rect: Rect,
-    pub action: ClickAction,
-    pub data: String,
-}
-
-/// Action to perform when clicking an area
-#[derive(Debug, Clone)]
-pub enum ClickAction {
-    CopyToClipboard,
-    OpenExplorer,
-    CopyAndOpen,
-}
 
 /// Main application state for the TUI
 pub struct App {
@@ -112,14 +89,8 @@ pub struct App {
     pub vault_utxo: Option<OutPoint>,
     /// Current trigger UTXO
     pub trigger_utxo: Option<OutPoint>,
-    /// Selected vault info tab
-    pub vault_info_tab: usize,
     /// Show vault details popup
     pub show_vault_details: bool,
-    /// Clickable areas for mouse interaction
-    pub clickable_areas: Vec<ClickableArea>,
-    /// Clipboard instance
-    pub clipboard: Option<Clipboard>,
     /// Status message for user feedback
     pub status_message: String,
     /// Status message timer
@@ -181,21 +152,15 @@ impl App {
 
         // Try to load existing vault from auto_vault.json
         let vault = Self::load_vault_from_file().ok();
-        let vault_status = if vault.is_some() {
+        let vault_status = if let Some(ref v) = vault {
             VaultStatus::Created {
-                address: vault
-                    .as_ref()
-                    .unwrap()
-                    .get_vault_address()
-                    .unwrap_or_default(),
-                amount: vault.as_ref().unwrap().amount,
+                address: v.get_vault_address().unwrap_or_default(),
+                amount: v.amount,
             }
         } else {
             VaultStatus::None
         };
 
-        // Initialize clipboard
-        let clipboard = Clipboard::new().ok();
 
         let mut app = Self {
             current_tab: 0,
@@ -219,10 +184,7 @@ impl App {
             progress_message: String::new(),
             vault_utxo: None,
             trigger_utxo: None,
-            vault_info_tab: 0,
             show_vault_details: false,
-            clickable_areas: Vec::new(),
-            clipboard,
             status_message: String::new(),
             status_timer: None,
             transcript_log: Vec::new(),
@@ -248,109 +210,6 @@ impl App {
         Ok(app)
     }
 
-    /// Handle mouse clicks
-    pub fn handle_mouse_click(&mut self, x: u16, y: u16) {
-        // Find clicked area and collect the action/data to avoid borrow conflicts
-        let clicked_area = self.clickable_areas.iter().find(|area| {
-            x >= area.rect.x
-                && x < area.rect.x + area.rect.width
-                && y >= area.rect.y
-                && y < area.rect.y + area.rect.height
-        });
-
-        if let Some(area) = clicked_area {
-            let action = area.action.clone();
-            let data = area.data.clone();
-            self.execute_click_action(&action, &data);
-        }
-    }
-
-    /// Execute click action
-    fn execute_click_action(&mut self, action: &ClickAction, data: &str) {
-        match action {
-            ClickAction::CopyToClipboard => {
-                self.handle_copy_action(data);
-            }
-            ClickAction::OpenExplorer => {
-                self.handle_open_action(data);
-            }
-            ClickAction::CopyAndOpen => {
-                self.handle_copy_and_open_action(data);
-            }
-        }
-    }
-
-    fn handle_copy_action(&mut self, data: &str) {
-        // Attempt to copy to clipboard
-        if let Ok(mut clipboard) = Clipboard::new() {
-            if clipboard.set_text(data.to_string()).is_ok() {
-                let message = format!(
-                    "📋 Copied to clipboard: {}",
-                    explorer::format_address_short(data)
-                );
-                self.show_status_message(message);
-            } else {
-                self.show_status_message("❌ Failed to copy to clipboard".to_string());
-            }
-        } else {
-            // Fallback: show the full data for manual copying
-            let message = format!("📋 Copy this: {}", data);
-            self.show_status_message(message);
-        }
-    }
-
-    fn handle_open_action(&mut self, data: &str) {
-        let url = if data.len() == 64 {
-            explorer::tx_url(data)
-        } else {
-            explorer::address_url(data)
-        };
-
-        let message = if webbrowser::open(&url).is_ok() {
-            format!(
-                "🌐 Opened in browser: {}",
-                explorer::format_address_short(data)
-            )
-        } else {
-            "❌ Failed to open browser".to_string()
-        };
-
-        self.show_status_message(message);
-    }
-
-    fn handle_copy_and_open_action(&mut self, data: &str) {
-        let copy_success = if let Some(ref mut clipboard) = self.clipboard {
-            clipboard.set_text(data).is_ok()
-        } else {
-            false
-        };
-
-        let url = if data.len() == 64 {
-            explorer::tx_url(data)
-        } else {
-            explorer::address_url(data)
-        };
-
-        let open_success = webbrowser::open(&url).is_ok();
-
-        let message = if copy_success && open_success {
-            format!(
-                "📋🌐 Copied & opened: {}",
-                explorer::format_address_short(data)
-            )
-        } else if copy_success {
-            format!("📋 Copied: {}", explorer::format_address_short(data))
-        } else if open_success {
-            format!(
-                "🌐 Opened in browser: {}",
-                explorer::format_address_short(data)
-            )
-        } else {
-            "❌ Failed to copy and open".to_string()
-        };
-
-        self.show_status_message(message);
-    }
 
     /// Show status message with timer
     fn show_status_message(&mut self, message: String) {
@@ -368,16 +227,6 @@ impl App {
         }
     }
 
-    /// Clear clickable areas
-    pub fn clear_clickable_areas(&mut self) {
-        self.clickable_areas.clear();
-    }
-
-    /// Add clickable area
-    pub fn add_clickable_area(&mut self, rect: Rect, action: ClickAction, data: String) {
-        self.clickable_areas
-            .push(ClickableArea { rect, action, data });
-    }
 
     /// Add entry to transcript log
     pub fn log_to_transcript(&mut self, message: String) {
@@ -923,7 +772,7 @@ pub async fn run_tui() -> Result<Option<String>> {
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -948,182 +797,174 @@ pub async fn run_tui() -> Result<Option<String>> {
             .unwrap_or_else(|| Duration::from_secs(0));
 
         if crossterm::event::poll(timeout)? {
-            match event::read()? {
-                Event::Key(key) => {
-                    if key.kind == KeyEventKind::Press {
-                        match key.code {
-                            KeyCode::Char('q') => break,
-                            KeyCode::Char('c')
-                                if key
-                                    .modifiers
-                                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
-                            {
-                                break
+            if let Event::Key(key) = event::read()? {
+                if key.kind == KeyEventKind::Press {
+                    match key.code {
+                        KeyCode::Char('q') => break,
+                        KeyCode::Char('c')
+                            if key
+                                .modifiers
+                                .contains(crossterm::event::KeyModifiers::CONTROL) =>
+                        {
+                            break
+                        }
+                        KeyCode::Tab => {
+                            app.current_tab = (app.current_tab + 1) % app.tabs.len();
+                        }
+                        KeyCode::Char('1') => app.current_tab = 0,
+                        KeyCode::Char('2') => app.current_tab = 1,
+                        KeyCode::Char('3') => app.current_tab = 2,
+                        KeyCode::Char('4') => app.current_tab = 3,
+                        KeyCode::Char('r') => {
+                            if let Err(e) = app.update_data().await {
+                                app.show_popup(format!("Update failed: {}", e));
                             }
-                            KeyCode::Tab => {
-                                app.current_tab = (app.current_tab + 1) % app.tabs.len();
-                            }
-                            KeyCode::Char('1') => app.current_tab = 0,
-                            KeyCode::Char('2') => app.current_tab = 1,
-                            KeyCode::Char('3') => app.current_tab = 2,
-                            KeyCode::Char('4') => app.current_tab = 3,
-                            KeyCode::Char('r') => {
-                                if let Err(e) = app.update_data().await {
-                                    app.show_popup(format!("Update failed: {}", e));
-                                }
-                            }
-                            KeyCode::Char('n') => {
-                                // Create new vault (demo values)
+                        }
+                        KeyCode::Char('n') => {
+                            // Create new vault (demo values)
+                            app.log_to_transcript(format!(
+                                "🏗️ Creating new vault ({} sats, {} blocks delay)...",
+                                vault_config::DEFAULT_DEMO_AMOUNT,
+                                vault_config::DEFAULT_DEMO_CSV_DELAY
+                            ));
+                            let create_future = app.create_vault(
+                                vault_config::DEFAULT_DEMO_AMOUNT,
+                                vault_config::DEFAULT_DEMO_CSV_DELAY,
+                            );
+                            if let Err(e) = create_future.await {
+                                app.show_popup(format!("Failed to create vault: {}", e));
                                 app.log_to_transcript(format!(
-                                    "🏗️ Creating new vault ({} sats, {} blocks delay)...",
-                                    vault_config::DEFAULT_DEMO_AMOUNT,
-                                    vault_config::DEFAULT_DEMO_CSV_DELAY
+                                    "❌ Vault creation failed: {}",
+                                    e
                                 ));
-                                let create_future = app.create_vault(
-                                    vault_config::DEFAULT_DEMO_AMOUNT,
-                                    vault_config::DEFAULT_DEMO_CSV_DELAY,
-                                );
-                                if let Err(e) = create_future.await {
-                                    app.show_popup(format!("Failed to create vault: {}", e));
-                                    app.log_to_transcript(format!(
-                                        "❌ Vault creation failed: {}",
-                                        e
-                                    ));
-                                } else {
-                                    app.log_to_transcript(
-                                        "✅ Vault created successfully".to_string(),
-                                    );
-                                }
-                            }
-                            KeyCode::Char('f') => {
-                                // Fund vault programmatically
-                                app.log_to_transcript("💰 Funding vault via RPC...".to_string());
-                                let fund_future = app.fund_vault();
-                                if let Err(e) = fund_future.await {
-                                    app.show_popup(format!("Failed to fund vault: {}", e));
-                                    app.log_to_transcript(format!(
-                                        "❌ Vault funding failed: {}",
-                                        e
-                                    ));
-                                } else {
-                                    app.log_to_transcript(
-                                        "✅ Vault funded successfully".to_string(),
-                                    );
-                                }
-                            }
-                            KeyCode::Char('t') => {
-                                // Trigger unvault
+                            } else {
                                 app.log_to_transcript(
-                                    "🚀 Triggering unvault process...".to_string(),
+                                    "✅ Vault created successfully".to_string(),
                                 );
-                                let trigger_future = app.trigger_unvault();
-                                if let Err(e) = trigger_future.await {
-                                    app.show_popup(format!("Failed to trigger unvault: {}", e));
-                                    app.log_to_transcript(format!(
-                                        "❌ Unvault trigger failed: {}",
-                                        e
-                                    ));
-                                } else {
-                                    app.log_to_transcript(
-                                        "✅ Unvault triggered successfully".to_string(),
-                                    );
-                                }
                             }
-                            KeyCode::Char('c') => {
-                                // Emergency clawback
+                        }
+                        KeyCode::Char('f') => {
+                            // Fund vault programmatically
+                            app.log_to_transcript("💰 Funding vault via RPC...".to_string());
+                            let fund_future = app.fund_vault();
+                            if let Err(e) = fund_future.await {
+                                app.show_popup(format!("Failed to fund vault: {}", e));
+                                app.log_to_transcript(format!(
+                                    "❌ Vault funding failed: {}",
+                                    e
+                                ));
+                            } else {
                                 app.log_to_transcript(
-                                    "❄️ Performing emergency clawback...".to_string(),
+                                    "✅ Vault funded successfully".to_string(),
                                 );
-                                let clawback_future = app.emergency_clawback();
-                                if let Err(e) = clawback_future.await {
-                                    app.show_popup(format!("Failed to perform clawback: {}", e));
-                                    app.log_to_transcript(format!(
-                                        "❌ Emergency clawback failed: {}",
-                                        e
-                                    ));
-                                } else {
-                                    app.log_to_transcript(
-                                        "✅ Emergency clawback completed successfully".to_string(),
-                                    );
-                                }
                             }
-                            KeyCode::Char('h') => {
-                                // Hot withdrawal
+                        }
+                        KeyCode::Char('t') => {
+                            // Trigger unvault
+                            app.log_to_transcript(
+                                "🚀 Triggering unvault process...".to_string(),
+                            );
+                            let trigger_future = app.trigger_unvault();
+                            if let Err(e) = trigger_future.await {
+                                app.show_popup(format!("Failed to trigger unvault: {}", e));
+                                app.log_to_transcript(format!(
+                                    "❌ Unvault trigger failed: {}",
+                                    e
+                                ));
+                            } else {
                                 app.log_to_transcript(
-                                    "🔥 Performing hot withdrawal...".to_string(),
+                                    "✅ Unvault triggered successfully".to_string(),
                                 );
-                                let hot_future = app.hot_withdrawal();
-                                if let Err(e) = hot_future.await {
-                                    app.show_popup(format!(
-                                        "Failed to perform hot withdrawal: {}",
-                                        e
+                            }
+                        }
+                        KeyCode::Char('c') => {
+                            // Emergency clawback
+                            app.log_to_transcript(
+                                "❄️ Performing emergency clawback...".to_string(),
+                            );
+                            let clawback_future = app.emergency_clawback();
+                            if let Err(e) = clawback_future.await {
+                                app.show_popup(format!("Failed to perform clawback: {}", e));
+                                app.log_to_transcript(format!(
+                                    "❌ Emergency clawback failed: {}",
+                                    e
+                                ));
+                            } else {
+                                app.log_to_transcript(
+                                    "✅ Emergency clawback completed successfully".to_string(),
+                                );
+                            }
+                        }
+                        KeyCode::Char('h') => {
+                            // Hot withdrawal
+                            app.log_to_transcript(
+                                "🔥 Performing hot withdrawal...".to_string(),
+                            );
+                            let hot_future = app.hot_withdrawal();
+                            if let Err(e) = hot_future.await {
+                                app.show_popup(format!(
+                                    "Failed to perform hot withdrawal: {}",
+                                    e
+                                ));
+                                app.log_to_transcript(format!(
+                                    "❌ Hot withdrawal failed: {}",
+                                    e
+                                ));
+                            } else {
+                                app.log_to_transcript(
+                                    "✅ Hot withdrawal completed successfully".to_string(),
+                                );
+                            }
+                        }
+                        KeyCode::Char('v') => {
+                            // Toggle vault details popup
+                            app.show_vault_details = !app.show_vault_details;
+                        }
+                        KeyCode::Char('o') => {
+                            // Open last transaction in explorer
+                            if let Some(last_tx) = app.transactions.last().cloned() {
+                                let url = explorer::tx_url(&last_tx.txid);
+                                if webbrowser::open(&url).is_ok() {
+                                    app.show_status_message(format!(
+                                        "🌐 Opened last transaction: {}",
+                                        explorer::format_txid_short(&last_tx.txid)
                                     ));
                                     app.log_to_transcript(format!(
-                                        "❌ Hot withdrawal failed: {}",
-                                        e
+                                        "🌐 Opened transaction {} in browser",
+                                        explorer::format_txid_short(&last_tx.txid)
                                     ));
-                                } else {
-                                    app.log_to_transcript(
-                                        "✅ Hot withdrawal completed successfully".to_string(),
-                                    );
-                                }
-                            }
-                            KeyCode::Char('v') => {
-                                // Toggle vault details popup
-                                app.show_vault_details = !app.show_vault_details;
-                            }
-                            KeyCode::Char('o') => {
-                                // Open last transaction in explorer
-                                if let Some(last_tx) = app.transactions.last().cloned() {
-                                    let url = explorer::tx_url(&last_tx.txid);
-                                    if webbrowser::open(&url).is_ok() {
-                                        app.show_status_message(format!(
-                                            "🌐 Opened last transaction: {}",
-                                            explorer::format_txid_short(&last_tx.txid)
-                                        ));
-                                        app.log_to_transcript(format!(
-                                            "🌐 Opened transaction {} in browser",
-                                            explorer::format_txid_short(&last_tx.txid)
-                                        ));
-                                    } else {
-                                        app.show_status_message(
-                                            "❌ Failed to open browser".to_string(),
-                                        );
-                                    }
                                 } else {
                                     app.show_status_message(
-                                        "ℹ️ No transactions to open".to_string(),
+                                        "❌ Failed to open browser".to_string(),
                                     );
                                 }
+                            } else {
+                                app.show_status_message(
+                                    "ℹ️ No transactions to open".to_string(),
+                                );
                             }
-                            KeyCode::Char('x') => {
-                                // Generate transcript and exit
-                                match app.generate_transcript() {
-                                    Ok(content) => {
-                                        transcript_content = Some(content);
-                                        break;
-                                    }
-                                    Err(e) => {
-                                        app.show_popup(format!(
-                                            "Failed to generate transcript: {}",
-                                            e
-                                        ));
-                                    }
+                        }
+                        KeyCode::Char('x') => {
+                            // Generate transcript and exit
+                            match app.generate_transcript() {
+                                Ok(content) => {
+                                    transcript_content = Some(content);
+                                    break;
+                                }
+                                Err(e) => {
+                                    app.show_popup(format!(
+                                        "Failed to generate transcript: {}",
+                                        e
+                                    ));
                                 }
                             }
-                            KeyCode::Esc | KeyCode::Enter => {
-                                app.hide_popup();
-                            }
-                            _ => {}
                         }
+                        KeyCode::Esc | KeyCode::Enter => {
+                            app.hide_popup();
+                        }
+                        _ => {}
                     }
                 }
-                Event::Mouse(mouse) => {
-                    if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
-                        app.handle_mouse_click(mouse.column, mouse.row);
-                    }
-                }
-                _ => {}
             }
         }
 
@@ -1138,11 +979,7 @@ pub async fn run_tui() -> Result<Option<String>> {
 
     // Restore terminal
     disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
 
     Ok(transcript_content)
@@ -1150,9 +987,6 @@ pub async fn run_tui() -> Result<Option<String>> {
 
 /// Render the main UI
 fn render_ui(f: &mut Frame, app: &mut App) {
-    // Clear clickable areas for this frame
-    app.clear_clickable_areas();
-
     // Update status message timer
     app.update_status_message();
 

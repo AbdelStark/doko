@@ -1,83 +1,40 @@
-//! # Mutinynet Block Explorer Client
-//!
-//! This module provides a client for interacting with the Mutinynet block explorer API
-//! to query address balances, transaction information, and other blockchain data.
-
 use crate::config::network::{EXPLORER_API_BASE, REQUEST_TIMEOUT};
 use crate::error::{VaultError, VaultResult};
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
-/// Statistics for address transaction outputs
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AddressStats {
-    /// Number of funded transaction outputs
-    pub funded_txo_count: u32,
-    /// Total amount funded in satoshis
-    pub funded_txo_sum: u64,
-    /// Number of spent transaction outputs  
-    pub spent_txo_count: u32,
-    /// Total amount spent in satoshis
-    pub spent_txo_sum: u64,
-    /// Total number of transactions
-    pub tx_count: u32,
+/// Address information from the Mutinynet explorer API
+#[derive(Debug, Deserialize)]
+pub struct AddressInfo {
+    #[serde(rename = "chain_stats")]
+    pub chain_stats: ChainStats,
 }
 
-/// Complete address information from the block explorer
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AddressInfo {
-    /// The Bitcoin address
-    pub address: String,
-    /// Confirmed transaction statistics
-    pub chain_stats: AddressStats,
-    /// Unconfirmed transaction statistics (mempool)
-    pub mempool_stats: AddressStats,
+/// Chain statistics for an address
+#[derive(Debug, Deserialize)]
+pub struct ChainStats {
+    #[serde(rename = "funded_txo_sum")]
+    pub funded_txo_sum: u64,
+    #[serde(rename = "spent_txo_sum")]
+    pub spent_txo_sum: u64,
 }
 
 impl AddressInfo {
-    /// Get the current balance of the address (funded - spent)
-    ///
-    /// This includes both confirmed transactions (chain_stats) and
-    /// unconfirmed transactions in the mempool (mempool_stats).
-    ///
-    /// # Returns
-    /// Balance in satoshis
+    /// Get the confirmed balance (funded - spent)
     pub fn get_balance(&self) -> u64 {
-        let chain_balance = self
-            .chain_stats
-            .funded_txo_sum
-            .saturating_sub(self.chain_stats.spent_txo_sum);
-        let mempool_balance = self
-            .mempool_stats
-            .funded_txo_sum
-            .saturating_sub(self.mempool_stats.spent_txo_sum);
-        chain_balance.saturating_add(mempool_balance)
-    }
-
-    /// Get only confirmed balance (excluding mempool)
-    pub fn get_confirmed_balance(&self) -> u64 {
-        self.chain_stats
-            .funded_txo_sum
-            .saturating_sub(self.chain_stats.spent_txo_sum)
-    }
-
-    /// Get unconfirmed balance (mempool only)
-    pub fn get_unconfirmed_balance(&self) -> u64 {
-        self.mempool_stats
-            .funded_txo_sum
-            .saturating_sub(self.mempool_stats.spent_txo_sum)
+        self.chain_stats.funded_txo_sum.saturating_sub(self.chain_stats.spent_txo_sum)
     }
 }
 
 /// Client for interacting with the Mutinynet block explorer API
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MutinynetExplorer {
     client: Client,
-    base_url: String,
+    api_base: String,
 }
 
 impl MutinynetExplorer {
-    /// Create a new Mutinynet explorer client
+    /// Create a new explorer client
     pub fn new() -> VaultResult<Self> {
         let client = Client::builder()
             .timeout(REQUEST_TIMEOUT)
@@ -86,16 +43,15 @@ impl MutinynetExplorer {
 
         Ok(Self {
             client,
-            base_url: EXPLORER_API_BASE.to_string(),
+            api_base: EXPLORER_API_BASE.to_string(),
         })
     }
 
-    /// Get address information including balance
+    /// Get address information from the explorer API
     pub async fn get_address_info(&self, address: &str) -> VaultResult<AddressInfo> {
-        let url = format!("{}/address/{}", self.base_url, address);
-
-        let response = self
-            .client
+        let url = format!("{}/address/{}", self.api_base, address);
+        
+        let response = self.client
             .get(&url)
             .send()
             .await
@@ -104,7 +60,7 @@ impl MutinynetExplorer {
         if !response.status().is_success() {
             return Err(VaultError::operation(
                 "api_request",
-                format!("HTTP {} - Failed to fetch address info", response.status()),
+                format!("HTTP {}: Failed to fetch address info", response.status()),
             ));
         }
 
@@ -116,29 +72,9 @@ impl MutinynetExplorer {
         Ok(address_info)
     }
 
-    /// Get balance for an address in satoshis
+    /// Get the balance for a specific address
     pub async fn get_address_balance(&self, address: &str) -> VaultResult<u64> {
         let info = self.get_address_info(address).await?;
         Ok(info.get_balance())
-    }
-
-    /// Get multiple address balances concurrently
-    pub async fn get_multiple_balances(
-        &self,
-        addresses: &[&str],
-    ) -> VaultResult<Vec<(String, u64)>> {
-        let mut results = Vec::new();
-
-        for address in addresses {
-            match self.get_address_balance(address).await {
-                Ok(balance) => results.push((address.to_string(), balance)),
-                Err(_) => {
-                    log::warn!("Failed to get balance for address: {}", address);
-                    results.push((address.to_string(), 0));
-                }
-            }
-        }
-
-        Ok(results)
     }
 }

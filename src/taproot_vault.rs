@@ -965,22 +965,6 @@ impl TaprootVault {
         Ok(vault)
     }
 
-    /// Set the current UTXO being tracked by this vault.
-    /// 
-    /// This method updates the vault's internal state to track a specific UTXO,
-    /// typically after the vault has been funded or after a transaction has been
-    /// broadcast.
-    /// 
-    /// # Use Cases
-    /// - After funding: Track the vault deposit UTXO
-    /// - After trigger: Track the trigger transaction UTXO
-    /// - State management: Keep vault operations synchronized
-    /// 
-    /// # Parameters
-    /// * `outpoint` - The UTXO outpoint (txid:vout) to track
-    pub fn set_current_outpoint(&mut self, outpoint: OutPoint) {
-        self.current_outpoint = Some(outpoint);
-    }
 }
 
 use bitcoin::consensus::Encodable;
