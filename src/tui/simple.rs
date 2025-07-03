@@ -6,7 +6,7 @@
 
 use crate::config::{files, vault as vault_config};
 use crate::error::VaultResult;
-use crate::explorer_client::MutinynetExplorer;
+use crate::services::MutinynetExplorer;
 use anyhow::Result;
 use bitcoin::{OutPoint, Txid};
 use crossterm::{
@@ -25,7 +25,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{rpc_client::MutinynetClient, taproot_vault::TaprootVault};
+use crate::{services::MutinynetClient, vaults::simple::TaprootVault};
 
 /// Mutinynet block explorer utilities
 mod explorer {

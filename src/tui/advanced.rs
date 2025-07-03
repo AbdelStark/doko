@@ -13,9 +13,9 @@
 //! - **Key Management**: Secure handling of cryptographic operations
 
 use crate::{
-    advanced_vault::{AdvancedTaprootVault, VaultRole}, 
+    vaults::advanced::{AdvancedTaprootVault, VaultRole}, 
     csfs_primitives::DelegationRecord,
-    rpc_client::MutinynetClient,
+    services::MutinynetClient,
 };
 use anyhow::Result;
 use crossterm::{
@@ -1146,7 +1146,7 @@ fn render_delegation_table(f: &mut Frame, area: Rect, app: &AdvancedVaultApp) {
     
     let table = Table::new(
         rows,
-        &[
+        [
             Constraint::Length(20),
             Constraint::Length(12),
             Constraint::Length(8),

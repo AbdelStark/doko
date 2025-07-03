@@ -128,19 +128,15 @@ use clap::{Parser, Subcommand};
 use std::{env, str::FromStr, time::Duration};
 use tokio::time::sleep;
 
-mod advanced_tui;
-mod advanced_vault;
 mod config;
 mod csfs_primitives;
 mod error;
-mod explorer_client;
-mod rpc_client;
-mod taproot_vault;
-mod ui;
+mod services;
+mod tui;
+mod vaults;
 
-use rpc_client::MutinynetClient;
-use taproot_vault::TaprootVault;
-use advanced_vault::AdvancedTaprootVault;
+use services::MutinynetClient;
+use vaults::{TaprootVault, AdvancedTaprootVault};
 
 /// Vault implementation type
 #[derive(Clone, Debug)]
@@ -449,14 +445,14 @@ async fn main() -> Result<()> {
         Commands::Dashboard { vault_type } => {
             match vault_type {
                 VaultType::Simple => {
-                    if let Some(transcript_content) = ui::run_tui().await? {
+                    if let Some(transcript_content) = tui::run_tui().await? {
                         // Display transcript content to console after TUI cleanup
                         println!("\n{}", transcript_content);
                         println!("📁 Transcript saved to ./transcripts/ directory");
                     }
                 }
                 VaultType::AdvancedCsfsKeyDelegation => {
-                    advanced_tui::run_advanced_tui().await?;
+                    tui::run_advanced_tui().await?;
                 }
             }
         }
