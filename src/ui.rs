@@ -4,14 +4,12 @@
 //! Bitcoin vaults. Built with ratatui, it offers a web-app-like experience
 //! with real-time updates, interactive controls, and comprehensive vault monitoring.
 
-use crate::config::{files, ui as ui_config, vault as vault_config};
-use crate::error::{UiError, UiResult, VaultError, VaultResult};
+use crate::config::{files, vault as vault_config};
+use crate::error::VaultResult;
 use crate::explorer_client::MutinynetExplorer;
-use crate::utils::{address, amount, time};
 use anyhow::Result;
 use arboard::Clipboard;
 use bitcoin::{OutPoint, Txid};
-use chrono;
 use crossterm::{
     event::{
         self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseButton,
@@ -406,15 +404,9 @@ impl App {
         let filename = format!("{}/doko_transcript_{}.txt", transcripts_dir, timestamp);
 
         let mut content = String::new();
-        content.push_str(&format!(
-            "┌─────────────────────────────────────────────────────────────────┐\n"
-        ));
-        content.push_str(&format!(
-            "│                     🔐 DOKO VAULT TRANSCRIPT 🔐                  │\n"
-        ));
-        content.push_str(&format!(
-            "└─────────────────────────────────────────────────────────────────┘\n\n"
-        ));
+        content.push_str("┌─────────────────────────────────────────────────────────────────┐\n");
+        content.push_str("│                     🔐 DOKO VAULT TRANSCRIPT 🔐                  │\n");
+        content.push_str("└─────────────────────────────────────────────────────────────────┘\n\n");
 
         content.push_str(&format!(
             "📅 Session Date: {}\n",
@@ -426,7 +418,7 @@ impl App {
             (session_duration.as_secs() % 3600) / 60,
             session_duration.as_secs() % 60
         ));
-        content.push_str(&format!("🌐 Network: Mutinynet (Bitcoin Signet)\n"));
+        content.push_str("🌐 Network: Mutinynet (Bitcoin Signet)\n");
         content.push_str(&format!(
             "🏦 Vault Operations: {} logged actions\n\n",
             self.transcript_log.len()
@@ -1200,7 +1192,7 @@ fn render_ui(f: &mut Frame, app: &mut App) {
 
 /// Render header with tabs and blockchain info
 fn render_header(f: &mut Frame, area: Rect, app: &App) {
-    let tabs = Tabs::new(app.tabs.iter().cloned().collect::<Vec<_>>())
+    let tabs = Tabs::new(app.tabs.to_vec())
         .block(
             Block::default()
                 .borders(Borders::ALL)

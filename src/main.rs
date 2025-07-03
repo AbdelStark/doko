@@ -1,5 +1,4 @@
 use crate::config::{files, network, vault as vault_config};
-use crate::error::{VaultError, VaultResult};
 use anyhow::Result;
 use bitcoin::OutPoint;
 use clap::{Parser, Subcommand};

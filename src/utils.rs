@@ -275,7 +275,7 @@ pub mod retry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitcoin::Network;
+    
 
     #[test]
     fn test_address_formatting() {

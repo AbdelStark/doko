@@ -18,7 +18,6 @@
 //! - **Taproot Privacy**: Script details only revealed when spending
 
 use crate::config::vault as vault_config;
-use crate::error::{VaultError, VaultResult};
 use anyhow::{Result, anyhow};
 use bitcoin::{
     hashes::{sha256, Hash},
