@@ -344,7 +344,7 @@ impl AdvancedTaprootVault {
     ///     OP_IF
     ///         # Delegated Operations: Operations manager with delegation proof
     ///         <treasurer_pubkey> OP_SWAP OP_CHECKSIGFROMSTACK OP_VERIFY
-    ///         OP_CHECKSIG
+    ///         <operations_pubkey> OP_CHECKSIG
     ///     OP_ELSE
     ///         OP_IF
     ///             # Time-Delayed Treasurer: Normal operations with CSV delay
@@ -360,18 +360,21 @@ impl AdvancedTaprootVault {
     ///
     /// # Spending Paths
     ///
-    /// 1. **Emergency Override** [1,1,1]: Immediate treasurer authority
-    /// 2. **Delegated Operations** [ops_sig, ops_key, delegation_sig, delegation_msg, 0,1,1]: Operations with proof
-    /// 3. **Time-Delayed** [treasurer_sig, 0,0,1]: Treasurer with CSV delay
-    /// 4. **Cold Recovery** [0,0,0]: Emergency clawback via CTV
+    /// 1. **Emergency Override** [treasurer_sig, 1]: Immediate treasurer authority
+    /// 2. **Delegated Operations** [ops_sig, delegation_sig, delegation_msg, 0, 1]: Operations with CSFS proof
+    /// 3. **Time-Delayed** [treasurer_sig, 0, 0]: Treasurer with CSV delay
+    /// 4. **Cold Recovery** [0, 0, 0]: Emergency clawback via CTV
     ///
     /// # Returns
     /// ScriptBuf containing the advanced trigger script
     fn advanced_trigger_script(&self) -> VaultResult<ScriptBuf> {
         let treasurer_xonly = XOnlyPublicKey::from_str(&self.treasurer_pubkey)
             .map_err(|e| VaultError::InvalidPublicKey(format!("Invalid treasurer pubkey: {}", e)))?;
+        let operations_xonly = XOnlyPublicKey::from_str(&self.operations_pubkey)
+            .map_err(|e| VaultError::InvalidPublicKey(format!("Invalid operations pubkey: {}", e)))?;
         let cold_ctv_hash = self.compute_cold_ctv_hash()?;
         
+        // Advanced CSFS script with proper delegation validation
         Ok(Builder::new()
             .push_opcode(OP_IF)
                 // Emergency override: immediate treasurer spend
@@ -379,9 +382,25 @@ impl AdvancedTaprootVault {
                 .push_opcode(OP_CHECKSIG)
             .push_opcode(OP_ELSE)
                 .push_opcode(OP_IF)
-                    // Delegated operations: simplified for now (remove CSFS)
-                    .push_x_only_key(&treasurer_xonly)
-                    .push_opcode(OP_CHECKSIG)
+                    // Delegated operations: Requires both delegation proof (CSFS) and operations signature
+                    // BIP-348 CSFS stack order (top to bottom): pubkey, message, signature
+                    // Initial witness stack order: [ops_sig, delegation_sig, delegation_msg, 0, 1]
+                    // After OP_IF: [ops_sig, delegation_sig, delegation_msg]
+                    
+                    // BIP-348 CSFS expects exactly: [signature, message, pubkey] from top to bottom
+                    // Current stack: [ops_sig, delegation_sig, delegation_msg]
+                    // We need: [delegation_sig, delegation_msg, treasurer_pubkey]
+                    .push_opcode(OP_ROT)                // Move ops_sig to bottom: [delegation_sig, delegation_msg, ops_sig]
+                    .push_x_only_key(&treasurer_xonly)  // Add treasurer pubkey: [delegation_sig, delegation_msg, ops_sig, treasurer_pubkey]
+                    .push_opcode(OP_SWAP)               // Swap to get correct order: [delegation_sig, delegation_msg, treasurer_pubkey, ops_sig]
+                    .push_opcode(OP_NOP4)               // OP_CHECKSIGFROMSTACK - consumes top 3 items, pushes 1 if valid
+                    // Stack is now: [csfs_result, ops_sig] - CSFS result and ops_sig
+                    .push_opcode(OP_VERIFY)             // Verify CSFS result, pops it, leaves [ops_sig]
+                    
+                    // Then verify operations manager signature on transaction
+                    .push_x_only_key(&operations_xonly) // Push operations pubkey: [ops_sig, ops_pubkey]
+                    .push_opcode(OP_CHECKSIG)           // Verify ops signature, consumes both, pushes result
+                    
                 .push_opcode(OP_ELSE)
                     .push_opcode(OP_IF)
                         // Time-delayed treasurer operations
@@ -930,7 +949,7 @@ impl AdvancedTaprootVault {
         
         let signature = secp.sign_schnorr(&msg, &treasurer_keypair);
 
-        // Create witness for emergency path: [signature, 1, 1, 1, script, control_block]
+        // Create witness for emergency path: [signature, 1, script, control_block]
         let nums_point = Self::nums_point()
             .map_err(|e| VaultError::Other(format!("NUMS point error: {}", e)))?;
         let spend_info = TaprootBuilder::new()
@@ -967,7 +986,7 @@ impl AdvancedTaprootVault {
     /// # Returns
     /// A signed transaction ready for broadcast (delegated path)
     pub fn create_delegated_spend_tx(
-        &self,
+        &mut self,
         trigger_outpoint: OutPoint,
         delegation: &DelegationRecord,
         destination_address: &str,
@@ -1012,12 +1031,14 @@ impl AdvancedTaprootVault {
             output: vec![output],
         };
 
-        // Sign with treasurer key (simplified delegated path)
+        // REAL CSFS IMPLEMENTATION - Operations manager + delegation proof
         let secp = Secp256k1::new();
-        let treasurer_privkey = SecretKey::from_slice(&hex::decode(&self.treasurer_privkey)
+        
+        // Get operations private key to sign the transaction
+        let operations_privkey = SecretKey::from_slice(&hex::decode(&self.operations_privkey)
             .map_err(|e| VaultError::InvalidPrivateKey(format!("Invalid hex: {}", e)))?)
             .map_err(|e| VaultError::InvalidPrivateKey(format!("Invalid secret key: {}", e)))?;
-        let treasurer_keypair = Keypair::from_secret_key(&secp, &treasurer_privkey);
+        let operations_keypair = Keypair::from_secret_key(&secp, &operations_privkey);
 
         let prevouts = vec![TxOut {
             value: Amount::from_sat(self.amount - vault_config::DEFAULT_FEE_SATS),
@@ -1034,6 +1055,7 @@ impl AdvancedTaprootVault {
         let trigger_script = self.advanced_trigger_script()?;
         let leaf_hash = TapLeafHash::from_script(&trigger_script, LeafVersion::TapScript);
         
+        // Operations manager signs the transaction
         let sighash = sighash_cache
             .taproot_script_spend_signature_hash(
                 0,
@@ -1046,14 +1068,28 @@ impl AdvancedTaprootVault {
         let msg = Message::from_digest_slice(sighash.as_byte_array())
             .map_err(|e| VaultError::SigningError(format!("Message creation failed: {}", e)))?;
         
-        let treasurer_signature = secp.sign_schnorr(&msg, &treasurer_keypair);
+        let operations_signature = secp.sign_schnorr(&msg, &operations_keypair);
 
-        // Note: Simplified delegated path - CSFS integration would require these:
-        // let csfs_ops = CsfsOperations::new(self.network);
-        // let delegation_message_hash = csfs_ops.serialize_delegation_message(&delegation.message);
-        // let delegation_sig_bytes = hex::decode(&delegation.delegator_signature)?;
+        // Get CSFS operations to serialize delegation message for CSFS validation
+        let csfs_ops = self.get_csfs_ops().clone();
+        let delegation_message_hash = csfs_ops.serialize_delegation_message(&delegation.message);
+        let delegation_sig_bytes = hex::decode(&delegation.delegator_signature)
+            .map_err(|e| VaultError::InvalidSignature(format!("Invalid delegation signature hex: {}", e)))?;
+        
+        // Validate signature format for BIP-348 CSFS (should be 64 bytes for Schnorr)
+        if delegation_sig_bytes.len() != 64 {
+            return Err(VaultError::InvalidSignature(format!(
+                "Delegation signature must be 64 bytes for BIP-348 CSFS, got {}",
+                delegation_sig_bytes.len()
+            )));
+        }
 
-        // Create witness for delegated path: [ops_sig, ops_key, delegation_sig, delegation_msg, 0, 1, 1, script, control_block]  
+        // Create proper CSFS witness stack for delegated spending
+        // Script path: [ops_sig, delegation_sig, delegation_msg, 0, 1]
+        // Stack after IF consumption: [ops_sig, delegation_sig, delegation_msg]
+        // Script rearranges to BIP-348 format: [treasurer_pubkey, delegation_msg, delegation_sig]
+        // CSFS checks delegation_sig against delegation_msg with treasurer_pubkey
+        // Finally CHECKSIG checks ops_sig against transaction
         let nums_point = Self::nums_point()
             .map_err(|e| VaultError::Other(format!("NUMS point error: {}", e)))?;
         let spend_info = TaprootBuilder::new()
@@ -1063,9 +1099,12 @@ impl AdvancedTaprootVault {
             .map_err(|e| VaultError::Other(format!("Taproot finalization error: {:?}", e)))?;
 
         let mut witness = Witness::new();
-        witness.push(treasurer_signature.as_ref()); // Treasurer signature (64 bytes)
+        // Witness stack for CSFS delegated path:
+        witness.push(operations_signature.as_ref());   // Operations signature for final CHECKSIG
+        witness.push(&delegation_sig_bytes);           // Delegation signature for CSFS verification
+        witness.push(&delegation_message_hash);        // Delegation message for CSFS verification
+        witness.push([]); // False for first IF (not emergency path)
         witness.push([1]); // True for second IF (delegated path)
-        witness.push([]); // False for first IF (go to ELSE) 
         witness.push(trigger_script.as_bytes());
         witness.push(
             spend_info
@@ -1641,7 +1680,7 @@ mod tests {
         
         // Verify witness structure for delegated path
         let witness = &delegated_tx.input[0].witness;
-        assert_eq!(witness.len(), 5); // treasurer_sig + flag + flag + script + control
+        assert_eq!(witness.len(), 7); // ops_sig + delegation_sig + delegation_msg + flag + flag + script + control
     }
 
     #[test]
@@ -1749,9 +1788,13 @@ mod tests {
         // Should contain hash material (32-byte CTV hash)
         assert!(script_bytes.contains(&OP_NOP4.to_u8())); // OP_CHECKTEMPLATEVERIFY placeholder
         
-        // Should have treasurer pubkey embedded multiple times (emergency, delegated, timelock paths)
+        // Should have treasurer pubkey embedded multiple times (emergency, delegated CSFS, timelock paths)
         let treasurer_xonly = XOnlyPublicKey::from_str(&vault.treasurer_pubkey).unwrap();
         let treasurer_bytes = treasurer_xonly.serialize();
+        
+        // Should have operations pubkey embedded once (delegated path)
+        let operations_xonly = XOnlyPublicKey::from_str(&vault.operations_pubkey).unwrap();
+        let operations_bytes = operations_xonly.serialize();
         
         // Count occurrences of treasurer pubkey in script
         let mut treasurer_count = 0;
@@ -1760,7 +1803,16 @@ mod tests {
                 treasurer_count += 1;
             }
         }
-        assert_eq!(treasurer_count, 3); // Used in three different spending paths
+        assert_eq!(treasurer_count, 3); // Used in emergency, delegated CSFS, and timelock paths
+        
+        // Count occurrences of operations pubkey in script
+        let mut operations_count = 0;
+        for window in script_bytes.windows(32) {
+            if window == operations_bytes {
+                operations_count += 1;
+            }
+        }
+        assert_eq!(operations_count, 1); // Used in delegated path only
     }
 
     #[test]

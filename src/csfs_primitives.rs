@@ -226,10 +226,17 @@ impl CsfsOperations {
         
         let keypair = Keypair::from_secret_key(&self.secp, &secret_key);
         
-        // Hash the message using SHA256 (BIP-340 compatible)
-        let message_hash = sha256::Hash::hash(message);
-        let message_for_signing = Message::from_digest_slice(&message_hash[..])
-            .map_err(|e| VaultError::SigningError(format!("Invalid message hash: {}", e)))?;
+        // For BIP-348, we sign the message directly if it's 32 bytes (already hashed)
+        // Otherwise, hash it first
+        let message_for_signing = if message.len() == 32 {
+            Message::from_digest_slice(message)
+                .map_err(|e| VaultError::SigningError(format!("Invalid message hash: {}", e)))?
+        } else {
+            // Hash the message using SHA256 (BIP-340 compatible)
+            let message_hash = sha256::Hash::hash(message);
+            Message::from_digest_slice(&message_hash[..])
+                .map_err(|e| VaultError::SigningError(format!("Invalid message hash: {}", e)))?
+        };
         
         // Create BIP-340 Schnorr signature
         let signature = self.secp.sign_schnorr(&message_for_signing, &keypair);
