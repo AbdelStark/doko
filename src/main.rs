@@ -128,6 +128,7 @@ use clap::{Parser, Subcommand};
 use std::{env, str::FromStr, time::Duration};
 use tokio::time::sleep;
 
+mod advanced_tui;
 mod advanced_vault;
 mod config;
 mod csfs_primitives;
@@ -343,7 +344,11 @@ enum Commands {
         vault_file: String,
     },
     /// Launch interactive TUI dashboard
-    Dashboard,
+    Dashboard {
+        /// Vault implementation type
+        #[arg(long, default_value = "simple")]
+        vault_type: VaultType,
+    },
 }
 
 #[tokio::main]
@@ -441,11 +446,18 @@ async fn main() -> Result<()> {
         } => {
             cold_recovery(&trigger_utxo, &vault_file).await?;
         }
-        Commands::Dashboard => {
-            if let Some(transcript_content) = ui::run_tui().await? {
-                // Display transcript content to console after TUI cleanup
-                println!("\n{}", transcript_content);
-                println!("📁 Transcript saved to ./transcripts/ directory");
+        Commands::Dashboard { vault_type } => {
+            match vault_type {
+                VaultType::Simple => {
+                    if let Some(transcript_content) = ui::run_tui().await? {
+                        // Display transcript content to console after TUI cleanup
+                        println!("\n{}", transcript_content);
+                        println!("📁 Transcript saved to ./transcripts/ directory");
+                    }
+                }
+                VaultType::AdvancedCsfsKeyDelegation => {
+                    advanced_tui::run_advanced_tui().await?;
+                }
             }
         }
     }
