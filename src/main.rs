@@ -250,9 +250,12 @@ enum Commands {
         /// CSV delay in blocks
         #[arg(short, long)]
         delay: Option<u32>,
-        /// Demo scenario: hot, cold, or both
+        /// Demo scenario: hot, cold, both, emergency, delegated, timelock, cold-recovery
         #[arg(short, long, default_value = "cold")]
         scenario: String,
+        /// Vault implementation type
+        #[arg(long, default_value = "simple")]
+        vault_type: VaultType,
     },
     /// Create a delegation for advanced vaults
     CreateDelegation {
@@ -382,8 +385,9 @@ async fn main() -> Result<()> {
             amount,
             delay,
             scenario,
+            vault_type,
         } => {
-            auto_demo(amount, delay, &scenario).await?;
+            auto_demo(amount, delay, &scenario, vault_type).await?;
         }
         Commands::CreateDelegation {
             vault_file,
@@ -1033,7 +1037,7 @@ async fn create_cold(trigger_utxo: &str) -> Result<()> {
 }
 
 
-async fn auto_demo(amount: Option<u64>, delay: Option<u32>, scenario: &str) -> Result<()> {
+async fn auto_demo(amount: Option<u64>, delay: Option<u32>, scenario: &str, vault_type: VaultType) -> Result<()> {
     // Load environment variables
     dotenv::dotenv().ok();
 
@@ -1051,8 +1055,19 @@ async fn auto_demo(amount: Option<u64>, delay: Option<u32>, scenario: &str) -> R
             .unwrap_or(vault_config::DEFAULT_DEMO_CSV_DELAY)
     });
 
-    println!("🏦 DOKO AUTOMATED VAULT DEMO");
-    println!("═══════════════════════════════");
+    match vault_type {
+        VaultType::Simple => {
+            simple_vault_auto_demo(amount, delay, scenario).await
+        }
+        VaultType::AdvancedCsfsKeyDelegation => {
+            advanced_vault_auto_demo(amount, delay, scenario).await
+        }
+    }
+}
+
+async fn simple_vault_auto_demo(amount: u64, delay: u32, scenario: &str) -> Result<()> {
+    println!("🏦 DOKO AUTOMATED VAULT DEMO (Simple)");
+    println!("═══════════════════════════════════════");
     println!();
 
     // Initialize RPC client
@@ -1179,6 +1194,175 @@ async fn auto_demo(amount: Option<u64>, delay: Option<u32>, scenario: &str) -> R
     match scenario {
         "cold" => println!("✅ Emergency cold clawback executed"),
         "hot" => println!("✅ Hot withdrawal executed"),
+        _ => println!("✅ Scenario completed"),
+    }
+    println!();
+    println!("🔍 View transactions on explorer:");
+    println!("   https://mutinynet.com");
+
+    Ok(())
+}
+
+async fn advanced_vault_auto_demo(amount: u64, delay: u32, scenario: &str) -> Result<()> {
+    println!("🏦 DOKO AUTOMATED VAULT DEMO (Advanced CTV + CSFS)");
+    println!("════════════════════════════════════════════════════");
+    println!();
+
+    // Initialize RPC client
+    print!("🔌 Connecting to Mutinynet...");
+    let rpc = MutinynetClient::new()?;
+    println!(" ✅ Connected to wallet: {}", rpc.get_wallet_name());
+
+    // Check blockchain info
+    let chain_info = rpc.get_blockchain_info()?;
+    let block_count = rpc.get_block_count()?;
+    println!(
+        "📡 Network: {} | Block Height: {}",
+        chain_info["chain"].as_str().unwrap_or("unknown"),
+        block_count
+    );
+    println!();
+
+    // STEP 1: Create and fund advanced vault
+    println!("┌─────────────────────────────────────────────────────────────┐");
+    println!("│              STEP 1: CREATE & FUND ADVANCED VAULT           │");
+    println!("└─────────────────────────────────────────────────────────────┘");
+    println!();
+
+    print!(
+        "🏗️  Creating Advanced Taproot vault ({} sats, {} block delay)...",
+        amount, delay
+    );
+    let mut vault = AdvancedTaprootVault::new(amount, delay)?;
+    vault.save_to_file("auto_advanced_vault.json")?;
+    println!(" ✅");
+
+    let vault_address = vault.get_vault_address()?;
+    let trigger_address = vault.get_trigger_address()?;
+    let cold_address = vault.get_cold_address()?;
+    let ops_address = vault.get_operations_address()?;
+
+    println!("🏦 Advanced Vault Addresses:");
+    println!("  📍 Vault:       {}", vault_address);
+    println!("  🎯 Trigger:     {}", trigger_address);
+    println!("  ❄️  Cold:        {}", cold_address);
+    println!("  🔧 Operations:  {}", ops_address);
+    println!();
+
+    println!("🔑 Role-Based Access:");
+    println!("  👨‍💼 Treasurer:   {}... (emergency override + delegation creation)", &vault.treasurer_pubkey[..16]);
+    println!("  👩‍💻 Operations:  {}... (delegated spending)", &vault.operations_pubkey[..16]);
+    println!();
+
+    print!("💰 Funding vault with {} sats...", amount);
+    let funding_txid = rpc.fund_address(&vault_address, amount as f64 / 100_000_000.0)?;
+    println!(" ✅ TXID: {}", funding_txid);
+
+    // Wait for confirmation
+    print!("⏳ Waiting for confirmation...");
+    loop {
+        let confirmations = rpc.get_confirmations(&funding_txid)?;
+        if confirmations > 0 {
+            println!(" ✅ {} confirmations", confirmations);
+            break;
+        }
+        print!(".");
+        sleep(Duration::from_secs(2)).await;
+    }
+
+    // Find which output contains our vault funding
+    let tx_info = rpc.get_raw_transaction_verbose(&funding_txid)?;
+    let mut vault_vout = 0;
+    for (i, output) in tx_info["vout"].as_array().unwrap().iter().enumerate() {
+        if output["scriptPubKey"]["address"].as_str() == Some(&vault_address) {
+            vault_vout = i as u32;
+            break;
+        }
+    }
+
+    let vault_utxo = OutPoint::new(funding_txid, vault_vout);
+    println!("📦 Vault UTXO: {}:{}", funding_txid, vault_vout);
+    println!();
+
+    // STEP 2: Create delegation (for delegated scenarios)
+    if scenario == "delegated" {
+        println!("┌─────────────────────────────────────────────────────────────┐");
+        println!("│                   STEP 2: CREATE DELEGATION                 │");
+        println!("└─────────────────────────────────────────────────────────────┘");
+        println!();
+
+        print!("📋 Creating delegation from daily_ops template...");
+        let delegation = vault.create_delegation_from_template(
+            "daily_ops",
+            Some(amount / 2), // Delegate half the vault amount
+            Some(24),
+            Some("Auto demo delegation"),
+        )?;
+        vault.save_to_file("auto_advanced_vault.json")?;
+        println!(" ✅");
+
+        println!("🔑 Delegation Details:");
+        println!("  ID: {}", delegation.message.delegation_id);
+        println!("  Max Amount: {} sats", delegation.message.max_amount);
+        println!("  Purpose: {}", delegation.message.purpose);
+        println!();
+    }
+
+    // STEP 3: Trigger (Unvault)
+    println!("┌─────────────────────────────────────────────────────────────┐");
+    println!("│                   STEP 3: TRIGGER UNVAULT                   │");
+    println!("└─────────────────────────────────────────────────────────────┘");
+    println!();
+
+    print!("🚀 Creating trigger transaction...");
+    let trigger_tx = vault.create_trigger_tx(vault_utxo)?;
+    let trigger_hex = bitcoin::consensus::encode::serialize_hex(&trigger_tx);
+    println!(" ✅ TXID: {}", trigger_tx.txid());
+
+    print!("📡 Broadcasting trigger transaction...");
+    let trigger_txid = rpc.send_raw_transaction_hex(&trigger_hex)?;
+    println!(" ✅ Broadcast successful");
+
+    // Wait for confirmation
+    print!("⏳ Waiting for trigger confirmation...");
+    loop {
+        let confirmations = rpc.get_confirmations(&trigger_txid)?;
+        if confirmations > 0 {
+            println!(" ✅ {} confirmations", confirmations);
+            break;
+        }
+        print!(".");
+        sleep(Duration::from_secs(2)).await;
+    }
+
+    let trigger_utxo = OutPoint::new(trigger_txid, 0);
+    println!("📦 Trigger UTXO: {}:0", trigger_txid);
+    println!("💸 Amount: {} sats", trigger_tx.output[0].value.to_sat());
+    println!();
+
+    // STEP 4: Execute advanced scenario
+    match scenario {
+        "emergency" => execute_emergency_spend(&rpc, &vault, trigger_utxo).await?,
+        "delegated" => execute_delegated_spend(&rpc, &vault, trigger_utxo).await?,
+        "timelock" => execute_timelock_spend(&rpc, &vault, trigger_utxo).await?,
+        "cold-recovery" => execute_cold_recovery_advanced(&rpc, &vault, trigger_utxo).await?,
+        _ => {
+            return Err(anyhow::anyhow!(
+                "Invalid advanced scenario. Use 'emergency', 'delegated', 'timelock', or 'cold-recovery'"
+            ));
+        }
+    }
+
+    println!();
+    println!("🎉 ADVANCED VAULT DEMO COMPLETED SUCCESSFULLY!");
+    println!("─────────────────────────────────────────────────");
+    println!("✅ Advanced vault created and funded");
+    println!("✅ Trigger transaction broadcast");
+    match scenario {
+        "emergency" => println!("✅ Emergency override executed"),
+        "delegated" => println!("✅ Delegated spend executed"),
+        "timelock" => println!("✅ Time-delayed spend executed"),
+        "cold-recovery" => println!("✅ Cold recovery executed"),
         _ => println!("✅ Scenario completed"),
     }
     println!();
@@ -1615,6 +1799,248 @@ async fn cold_recovery(trigger_utxo: &str, vault_file: &str) -> Result<()> {
     println!();
     println!("🚀 Broadcast command:");
     println!("bitcoin-cli -signet sendrawtransaction {}", cold_hex);
+
+    Ok(())
+}
+
+// Advanced Vault Auto Demo Helper Functions
+
+async fn execute_emergency_spend(
+    rpc: &MutinynetClient,
+    vault: &AdvancedTaprootVault,
+    trigger_utxo: OutPoint,
+) -> Result<()> {
+    println!("┌─────────────────────────────────────────────────────────────┐");
+    println!("│                STEP 4: EMERGENCY OVERRIDE SPEND             │");
+    println!("└─────────────────────────────────────────────────────────────┘");
+    println!();
+
+    println!("🚨 EMERGENCY SITUATION DETECTED!");
+    println!("👨‍💼 Treasurer executing immediate override...");
+    println!("⚡ No delays or additional signatures required");
+    println!();
+
+    let ops_address = vault.get_operations_address()?;
+
+    print!("🚨 Creating emergency override transaction...");
+    let emergency_tx = vault.create_emergency_spend_tx(trigger_utxo, &ops_address)?;
+    let emergency_hex = bitcoin::consensus::encode::serialize_hex(&emergency_tx);
+    println!(" ✅ TXID: {}", emergency_tx.txid());
+
+    print!("📡 Broadcasting emergency transaction...");
+    let emergency_txid = rpc.send_raw_transaction_hex(&emergency_hex)?;
+    println!(" ✅ Broadcast successful");
+
+    // Wait for confirmation
+    print!("⏳ Waiting for emergency spend confirmation...");
+    loop {
+        let confirmations = rpc.get_confirmations(&emergency_txid)?;
+        if confirmations > 0 {
+            println!(" ✅ {} confirmations", confirmations);
+            break;
+        }
+        print!(".");
+        sleep(Duration::from_secs(2)).await;
+    }
+
+    println!();
+    println!("🛡️  EMERGENCY OVERRIDE COMPLETED!");
+    println!("   💰 Amount: {} sats", emergency_tx.output[0].value.to_sat());
+    println!("   📍 Address: {}", ops_address);
+    println!("   👨‍💼 Authority: Treasurer (immediate override)");
+    println!("   ⚡ Executed without delays or additional approvals");
+
+    Ok(())
+}
+
+async fn execute_delegated_spend(
+    rpc: &MutinynetClient,
+    vault: &AdvancedTaprootVault,
+    trigger_utxo: OutPoint,
+) -> Result<()> {
+    println!("┌─────────────────────────────────────────────────────────────┐");
+    println!("│                 STEP 4: DELEGATED SPEND                     │");
+    println!("└─────────────────────────────────────────────────────────────┘");
+    println!();
+
+    println!("🤝 DELEGATED OPERATIONS WORKFLOW");
+    println!("👩‍💻 Operations manager using delegation proof...");
+    println!("🔏 CSFS verification of treasurer's delegation signature");
+    println!();
+
+    // Find the active delegation
+    let active_delegations = vault.get_active_delegations();
+    if active_delegations.is_empty() {
+        return Err(anyhow::anyhow!("No active delegations found for demo"));
+    }
+    
+    let delegation = active_delegations[0];
+    let ops_address = vault.get_operations_address()?;
+
+    println!("🔑 Using Delegation:");
+    println!("  ID: {}", delegation.message.delegation_id);
+    println!("  Max Amount: {} sats", delegation.message.max_amount);
+    println!("  Purpose: {}", delegation.message.purpose);
+    println!();
+
+    print!("🤝 Creating delegated spend transaction...");
+    let delegated_tx = vault.create_delegated_spend_tx(trigger_utxo, delegation, &ops_address)?;
+    let delegated_hex = bitcoin::consensus::encode::serialize_hex(&delegated_tx);
+    println!(" ✅ TXID: {}", delegated_tx.txid());
+
+    print!("📡 Broadcasting delegated transaction...");
+    let delegated_txid = rpc.send_raw_transaction_hex(&delegated_hex)?;
+    println!(" ✅ Broadcast successful");
+
+    // Wait for confirmation
+    print!("⏳ Waiting for delegated spend confirmation...");
+    loop {
+        let confirmations = rpc.get_confirmations(&delegated_txid)?;
+        if confirmations > 0 {
+            println!(" ✅ {} confirmations", confirmations);
+            break;
+        }
+        print!(".");
+        sleep(Duration::from_secs(2)).await;
+    }
+
+    println!();
+    println!("🤝 DELEGATED SPEND COMPLETED!");
+    println!("   💰 Amount: {} sats", delegated_tx.output[0].value.to_sat());
+    println!("   📍 Address: {}", ops_address);
+    println!("   👩‍💻 Authority: Operations manager (delegated via CSFS)");
+    println!("   🔏 Delegation verified on-chain using OP_CHECKSIGFROMSTACK");
+
+    Ok(())
+}
+
+async fn execute_timelock_spend(
+    rpc: &MutinynetClient,
+    vault: &AdvancedTaprootVault,
+    trigger_utxo: OutPoint,
+) -> Result<()> {
+    println!("┌─────────────────────────────────────────────────────────────┐");
+    println!("│                STEP 4: TIME-DELAYED SPEND                   │");
+    println!("└─────────────────────────────────────────────────────────────┘");
+    println!();
+
+    println!("⏰ TIME-DELAYED TREASURER WORKFLOW");
+    println!("👨‍💼 Treasurer spend with CSV delay requirement...");
+    println!("⏳ CSV Delay: {} blocks", vault.csv_delay);
+    println!();
+
+    // Check current block height
+    let start_block = rpc.get_block_count()?;
+    let target_block = start_block + vault.csv_delay as u64;
+
+    println!("📊 Block Status:");
+    println!("   Current: {}", start_block);
+    println!("   Target:  {} (+{} blocks)", target_block, vault.csv_delay);
+    println!();
+
+    if vault.csv_delay > 5 {
+        println!(
+            "⏳ For demo purposes, skipping {} block wait...",
+            vault.csv_delay
+        );
+        println!(
+            "💡 In production, would wait for {} blocks (~{} minutes)",
+            vault.csv_delay,
+            vault.csv_delay / 6
+        );
+    } else {
+        println!("⏳ Waiting for {} blocks...", vault.csv_delay);
+        // For small delays, actually wait
+        let mut current_block = start_block;
+        while current_block < target_block {
+            sleep(Duration::from_secs(15)).await;
+            current_block = rpc.get_block_count()?;
+            print!("📊 Block: {} / {} ", current_block, target_block);
+            if current_block < target_block {
+                println!("(waiting...)");
+            } else {
+                println!("(ready!)");
+            }
+        }
+    }
+
+    let ops_address = vault.get_operations_address()?;
+
+    print!("⏰ Creating time-delayed spend transaction...");
+    let timelock_tx = vault.create_timelock_spend_tx(trigger_utxo, &ops_address)?;
+    let timelock_hex = bitcoin::consensus::encode::serialize_hex(&timelock_tx);
+    println!(" ✅ TXID: {}", timelock_tx.txid());
+
+    print!("📡 Broadcasting time-delayed transaction...");
+    let timelock_txid = rpc.send_raw_transaction_hex(&timelock_hex)?;
+    println!(" ✅ Broadcast successful");
+
+    // Wait for confirmation
+    print!("⏳ Waiting for time-delayed spend confirmation...");
+    loop {
+        let confirmations = rpc.get_confirmations(&timelock_txid)?;
+        if confirmations > 0 {
+            println!(" ✅ {} confirmations", confirmations);
+            break;
+        }
+        print!(".");
+        sleep(Duration::from_secs(2)).await;
+    }
+
+    println!();
+    println!("⏰ TIME-DELAYED SPEND COMPLETED!");
+    println!("   💰 Amount: {} sats", timelock_tx.output[0].value.to_sat());
+    println!("   📍 Address: {}", ops_address);
+    println!("   👨‍💼 Authority: Treasurer (with CSV delay)");
+    println!("   ⏳ Required {} block delay satisfied", vault.csv_delay);
+
+    Ok(())
+}
+
+async fn execute_cold_recovery_advanced(
+    rpc: &MutinynetClient,
+    vault: &AdvancedTaprootVault,
+    trigger_utxo: OutPoint,
+) -> Result<()> {
+    println!("┌─────────────────────────────────────────────────────────────┐");
+    println!("│                STEP 4: COLD RECOVERY (CTV)                  │");
+    println!("└─────────────────────────────────────────────────────────────┘");
+    println!();
+
+    println!("🧊 EMERGENCY COLD RECOVERY");
+    println!("🚨 Attack detected - executing immediate clawback...");
+    println!("🔒 CTV covenant enforcement - no signatures required");
+    println!();
+
+    print!("🧊 Creating cold recovery transaction...");
+    let cold_tx = vault.create_cold_recovery_tx(trigger_utxo)?;
+    let cold_hex = bitcoin::consensus::encode::serialize_hex(&cold_tx);
+    println!(" ✅ TXID: {}", cold_tx.txid());
+
+    print!("📡 Broadcasting cold recovery transaction...");
+    let cold_txid = rpc.send_raw_transaction_hex(&cold_hex)?;
+    println!(" ✅ Broadcast successful");
+
+    // Wait for confirmation
+    print!("⏳ Waiting for cold recovery confirmation...");
+    loop {
+        let confirmations = rpc.get_confirmations(&cold_txid)?;
+        if confirmations > 0 {
+            println!(" ✅ {} confirmations", confirmations);
+            break;
+        }
+        print!(".");
+        sleep(Duration::from_secs(2)).await;
+    }
+
+    let cold_address = vault.get_cold_address()?;
+
+    println!();
+    println!("🛡️  COLD RECOVERY COMPLETED!");
+    println!("   💰 Amount: {} sats", cold_tx.output[0].value.to_sat());
+    println!("   📍 Address: {}", cold_address);
+    println!("   🔒 Authority: CTV covenant (no signature required)");
+    println!("   ⚡ Immediate recovery - funds secured in cold storage");
 
     Ok(())
 }

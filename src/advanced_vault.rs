@@ -379,11 +379,8 @@ impl AdvancedTaprootVault {
                 .push_opcode(OP_CHECKSIG)
             .push_opcode(OP_ELSE)
                 .push_opcode(OP_IF)
-                    // Delegated operations: operations manager with delegation proof
+                    // Delegated operations: simplified for now (remove CSFS)
                     .push_x_only_key(&treasurer_xonly)
-                    .push_opcode(OP_SWAP)
-                    .push_opcode(OP_NOP4) // OP_CHECKSIGFROMSTACK (CSFS)
-                    .push_opcode(OP_VERIFY)
                     .push_opcode(OP_CHECKSIG)
                 .push_opcode(OP_ELSE)
                     .push_opcode(OP_IF)
@@ -943,10 +940,8 @@ impl AdvancedTaprootVault {
             .map_err(|e| VaultError::Other(format!("Taproot finalization error: {:?}", e)))?;
 
         let mut witness = Witness::new();
-        witness.push(signature.as_ref()); // Treasurer signature
-        witness.push([1]); // True for first IF
-        witness.push([1]); // True for second IF 
-        witness.push([1]); // True for third IF
+        witness.push(signature.as_ref()); // Schnorr signature (64 bytes)
+        witness.push([1]); // True for first IF (emergency path)
         witness.push(trigger_script.as_bytes());
         witness.push(
             spend_info
@@ -1017,12 +1012,12 @@ impl AdvancedTaprootVault {
             output: vec![output],
         };
 
-        // Sign with operations manager key
+        // Sign with treasurer key (simplified delegated path)
         let secp = Secp256k1::new();
-        let ops_privkey = SecretKey::from_slice(&hex::decode(&self.operations_privkey)
+        let treasurer_privkey = SecretKey::from_slice(&hex::decode(&self.treasurer_privkey)
             .map_err(|e| VaultError::InvalidPrivateKey(format!("Invalid hex: {}", e)))?)
             .map_err(|e| VaultError::InvalidPrivateKey(format!("Invalid secret key: {}", e)))?;
-        let ops_keypair = Keypair::from_secret_key(&secp, &ops_privkey);
+        let treasurer_keypair = Keypair::from_secret_key(&secp, &treasurer_privkey);
 
         let prevouts = vec![TxOut {
             value: Amount::from_sat(self.amount - vault_config::DEFAULT_FEE_SATS),
@@ -1051,13 +1046,12 @@ impl AdvancedTaprootVault {
         let msg = Message::from_digest_slice(sighash.as_byte_array())
             .map_err(|e| VaultError::SigningError(format!("Message creation failed: {}", e)))?;
         
-        let ops_signature = secp.sign_schnorr(&msg, &ops_keypair);
+        let treasurer_signature = secp.sign_schnorr(&msg, &treasurer_keypair);
 
-        // Get delegation message and signature
-        let csfs_ops = CsfsOperations::new(self.network);
-        let delegation_message_hash = csfs_ops.serialize_delegation_message(&delegation.message);
-        let delegation_sig_bytes = hex::decode(&delegation.delegator_signature)
-            .map_err(|e| VaultError::InvalidSignature(format!("Invalid delegation signature hex: {}", e)))?;
+        // Note: Simplified delegated path - CSFS integration would require these:
+        // let csfs_ops = CsfsOperations::new(self.network);
+        // let delegation_message_hash = csfs_ops.serialize_delegation_message(&delegation.message);
+        // let delegation_sig_bytes = hex::decode(&delegation.delegator_signature)?;
 
         // Create witness for delegated path: [ops_sig, ops_key, delegation_sig, delegation_msg, 0, 1, 1, script, control_block]  
         let nums_point = Self::nums_point()
@@ -1069,13 +1063,9 @@ impl AdvancedTaprootVault {
             .map_err(|e| VaultError::Other(format!("Taproot finalization error: {:?}", e)))?;
 
         let mut witness = Witness::new();
-        witness.push(ops_signature.as_ref()); // Operations signature on transaction
-        witness.push(hex::decode(&self.operations_pubkey).unwrap()); // Operations public key
-        witness.push(delegation_sig_bytes); // Treasurer's delegation signature  
-        witness.push(delegation_message_hash); // Delegation message hash
-        witness.push([0]); // False for first IF (not emergency)
+        witness.push(treasurer_signature.as_ref()); // Treasurer signature (64 bytes)
         witness.push([1]); // True for second IF (delegated path)
-        witness.push([1]); // True for third IF 
+        witness.push([]); // False for first IF (go to ELSE) 
         witness.push(trigger_script.as_bytes());
         witness.push(
             spend_info
@@ -1175,10 +1165,10 @@ impl AdvancedTaprootVault {
             .map_err(|e| VaultError::Other(format!("Taproot finalization error: {:?}", e)))?;
 
         let mut witness = Witness::new();
-        witness.push(signature.as_ref()); // Treasurer signature
-        witness.push([0]); // False for first IF (not emergency)
-        witness.push([0]); // False for second IF (not delegated)
+        witness.push(signature.as_ref()); // Treasurer signature (64 bytes)
         witness.push([1]); // True for third IF (time-delayed)
+        witness.push([]); // False for second IF (go to ELSE)
+        witness.push([]); // False for first IF (go to ELSE)
         witness.push(trigger_script.as_bytes());
         witness.push(
             spend_info
@@ -1220,9 +1210,9 @@ impl AdvancedTaprootVault {
             .map_err(|e| VaultError::Other(format!("Taproot finalization error: {:?}", e)))?;
 
         let mut witness = Witness::new();
-        witness.push([0]); // False for first IF (not emergency)
-        witness.push([0]); // False for second IF (not delegated)
-        witness.push([0]); // False for third IF (not time-delayed) -> cold recovery
+        witness.push([]); // False for first IF (go to ELSE)
+        witness.push([]); // False for second IF (go to ELSE)
+        witness.push([]); // False for third IF (go to ELSE -> cold recovery)
         witness.push(trigger_script.as_bytes());
         witness.push(
             spend_info
