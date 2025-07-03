@@ -129,6 +129,7 @@ use std::{env, str::FromStr, time::Duration};
 use tokio::time::sleep;
 
 mod config;
+mod csfs_primitives;
 mod error;
 mod explorer_client;
 mod rpc_client;

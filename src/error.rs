@@ -31,6 +31,34 @@ pub enum VaultError {
     /// Generic operational errors
     #[error("Operation '{operation}' failed: {message}")]
     Operation { operation: String, message: String },
+
+    /// Cryptographic signing errors
+    #[error("Signing error: {0}")]
+    SigningError(String),
+
+    /// Invalid private key format or value
+    #[error("Invalid private key: {0}")]
+    InvalidPrivateKey(String),
+
+    /// Invalid public key format or value
+    #[error("Invalid public key: {0}")]
+    InvalidPublicKey(String),
+
+    /// Invalid signature format or verification failure
+    #[error("Invalid signature: {0}")]
+    InvalidSignature(String),
+
+    /// Delegation has expired
+    #[error("Expired delegation: {0}")]
+    ExpiredDelegation(String),
+
+    /// Invalid delegation format or content
+    #[error("Invalid delegation: {0}")]
+    InvalidDelegation(String),
+
+    /// Generic error with custom message
+    #[error("{0}")]
+    Other(String),
 }
 
 impl VaultError {
