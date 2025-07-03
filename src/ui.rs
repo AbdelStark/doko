@@ -7,19 +7,22 @@
 use crate::config::{files, vault as vault_config};
 use crate::error::VaultResult;
 use crate::explorer_client::MutinynetExplorer;
+use crate::tx_decoder::TransactionDecoder;
 use anyhow::Result;
-use bitcoin::{OutPoint, Txid};
+use bitcoin::{OutPoint, Transaction, Txid};
 use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use hex;
 use ratatui::{
     prelude::*,
     widgets::{
         block::*, Borders, Cell, Clear, Gauge, List, ListItem, Paragraph, Row, Table, Tabs, Wrap,
     },
 };
+use std::str::FromStr;
 use std::{
     fs, io,
     time::{Duration, Instant},
@@ -53,7 +56,6 @@ mod explorer {
         }
     }
 }
-
 
 /// Main application state for the TUI
 pub struct App {
@@ -105,6 +107,8 @@ pub struct App {
     pub hot_balance: u64,
     /// Cold address balance
     pub cold_balance: u64,
+    /// Transaction decoder for analyzing Bitcoin transactions
+    pub tx_decoder: TransactionDecoder,
 }
 
 /// Vault operational status
@@ -161,7 +165,6 @@ impl App {
             VaultStatus::None
         };
 
-
         let mut app = Self {
             current_tab: 0,
             tabs: vec![
@@ -192,6 +195,7 @@ impl App {
             vault_balance: 0,
             hot_balance: 0,
             cold_balance: 0,
+            tx_decoder: TransactionDecoder::new(bitcoin::Network::Signet),
         };
 
         // Initialize transcript log
@@ -210,7 +214,6 @@ impl App {
         Ok(app)
     }
 
-
     /// Show status message with timer
     fn show_status_message(&mut self, message: String) {
         self.status_message = message;
@@ -226,7 +229,6 @@ impl App {
             }
         }
     }
-
 
     /// Add entry to transcript log
     pub fn log_to_transcript(&mut self, message: String) {
@@ -765,6 +767,131 @@ impl App {
             timestamp: chrono::Utc::now().format("%H:%M:%S").to_string(),
         });
     }
+
+    /// Decode and analyze a transaction
+    pub async fn decode_transaction(&mut self, txid: &str) -> Result<()> {
+        self.processing = true;
+        self.progress_message = "Decoding transaction...".to_string();
+
+        // Parse txid
+        let txid =
+            Txid::from_str(txid).map_err(|e| anyhow::anyhow!("Invalid transaction ID: {}", e))?;
+
+        // Get transaction from RPC
+        let tx_info = self.rpc.get_raw_transaction_verbose(&txid)?;
+
+        // Parse the hex transaction
+        let tx_hex = tx_info["hex"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Missing transaction hex in RPC response"))?;
+
+        let tx_bytes = hex::decode(tx_hex)
+            .map_err(|e| anyhow::anyhow!("Invalid hex transaction data: {}", e))?;
+
+        let tx: Transaction = bitcoin::consensus::deserialize(&tx_bytes)
+            .map_err(|e| anyhow::anyhow!("Failed to deserialize transaction: {}", e))?;
+
+        // Analyze the transaction
+        let analysis = self.tx_decoder.analyze_transaction(&tx)?;
+
+        // Create detailed popup with analysis
+        let mut popup_text = format!(
+            "🔍 Transaction Analysis: {}\n\n",
+            explorer::format_txid_short(&analysis.metadata.txid)
+        );
+
+        // Basic metadata
+        popup_text.push_str(&format!(
+            "📊 Metadata:\n  Version: {}\n  Inputs: {}\n  Outputs: {}\n  Size: {} bytes\n  Weight: {} WU\n\n",
+            analysis.metadata.version,
+            analysis.metadata.input_count,
+            analysis.metadata.output_count,
+            analysis.metadata.size,
+            analysis.metadata.weight
+        ));
+
+        // Detected patterns
+        if !analysis.patterns.is_empty() {
+            popup_text.push_str("🔍 Detected Patterns:\n");
+            for pattern in &analysis.patterns {
+                popup_text.push_str(&format!("  • {}\n", pattern));
+            }
+            popup_text.push('\n');
+        }
+
+        // Input analysis
+        popup_text.push_str("📥 Inputs:\n");
+        for input in &analysis.inputs {
+            popup_text.push_str(&format!(
+                "  [{}] {} ({})\n",
+                input.index,
+                explorer::format_txid_short(&input.outpoint),
+                input.spending_type
+            ));
+
+            if let Some(ref covenant) = input.script_sig.covenant_info {
+                popup_text.push_str(&format!("    🔗 Covenant: {}\n", covenant.covenant_type));
+            }
+        }
+        popup_text.push('\n');
+
+        // Output analysis
+        popup_text.push_str("📤 Outputs:\n");
+        for output in &analysis.outputs {
+            popup_text.push_str(&format!(
+                "  [{}] {} sats ({})\n",
+                output.index, output.value, output.address_type
+            ));
+
+            if let Some(ref address) = output.address {
+                popup_text.push_str(&format!(
+                    "    📍 {}\n",
+                    explorer::format_address_short(address)
+                ));
+            }
+
+            if let Some(ref covenant) = output.script_pubkey.covenant_info {
+                popup_text.push_str(&format!("    🔗 Covenant: {}\n", covenant.covenant_type));
+                if let Some(ref hash) = covenant.template_hash {
+                    popup_text.push_str(&format!(
+                        "    📋 Template: {}...{}\n",
+                        &hash[..8],
+                        &hash[hash.len() - 8..]
+                    ));
+                }
+            }
+        }
+
+        // Human-readable explanation
+        if !analysis.explanation.is_empty() {
+            popup_text.push_str(&format!("\n💡 Explanation:\n{}\n", analysis.explanation));
+        }
+
+        // Fee analysis
+        if let Some(ref fee_info) = analysis.fee_analysis {
+            popup_text.push_str(&format!(
+                "\n💰 Fee Analysis:\n  Fee: {} sats\n  Rate: {:.2} sats/vByte\n",
+                fee_info.total_fee, fee_info.fee_rate
+            ));
+        }
+
+        self.processing = false;
+        self.progress_message.clear();
+
+        // Show detailed analysis popup
+        self.show_popup(popup_text);
+
+        // Log to transcript
+        self.log_to_transcript(format!(
+            "🔍 Decoded transaction {} - {} inputs, {} outputs, {} patterns detected",
+            explorer::format_txid_short(&analysis.metadata.txid),
+            analysis.metadata.input_count,
+            analysis.metadata.output_count,
+            analysis.patterns.len()
+        ));
+
+        Ok(())
+    }
 }
 
 /// Run the TUI application
@@ -833,14 +960,9 @@ pub async fn run_tui() -> Result<Option<String>> {
                             );
                             if let Err(e) = create_future.await {
                                 app.show_popup(format!("Failed to create vault: {}", e));
-                                app.log_to_transcript(format!(
-                                    "❌ Vault creation failed: {}",
-                                    e
-                                ));
+                                app.log_to_transcript(format!("❌ Vault creation failed: {}", e));
                             } else {
-                                app.log_to_transcript(
-                                    "✅ Vault created successfully".to_string(),
-                                );
+                                app.log_to_transcript("✅ Vault created successfully".to_string());
                             }
                         }
                         KeyCode::Char('f') => {
@@ -849,28 +971,18 @@ pub async fn run_tui() -> Result<Option<String>> {
                             let fund_future = app.fund_vault();
                             if let Err(e) = fund_future.await {
                                 app.show_popup(format!("Failed to fund vault: {}", e));
-                                app.log_to_transcript(format!(
-                                    "❌ Vault funding failed: {}",
-                                    e
-                                ));
+                                app.log_to_transcript(format!("❌ Vault funding failed: {}", e));
                             } else {
-                                app.log_to_transcript(
-                                    "✅ Vault funded successfully".to_string(),
-                                );
+                                app.log_to_transcript("✅ Vault funded successfully".to_string());
                             }
                         }
                         KeyCode::Char('t') => {
                             // Trigger unvault
-                            app.log_to_transcript(
-                                "🚀 Triggering unvault process...".to_string(),
-                            );
+                            app.log_to_transcript("🚀 Triggering unvault process...".to_string());
                             let trigger_future = app.trigger_unvault();
                             if let Err(e) = trigger_future.await {
                                 app.show_popup(format!("Failed to trigger unvault: {}", e));
-                                app.log_to_transcript(format!(
-                                    "❌ Unvault trigger failed: {}",
-                                    e
-                                ));
+                                app.log_to_transcript(format!("❌ Unvault trigger failed: {}", e));
                             } else {
                                 app.log_to_transcript(
                                     "✅ Unvault triggered successfully".to_string(),
@@ -897,19 +1009,11 @@ pub async fn run_tui() -> Result<Option<String>> {
                         }
                         KeyCode::Char('h') => {
                             // Hot withdrawal
-                            app.log_to_transcript(
-                                "🔥 Performing hot withdrawal...".to_string(),
-                            );
+                            app.log_to_transcript("🔥 Performing hot withdrawal...".to_string());
                             let hot_future = app.hot_withdrawal();
                             if let Err(e) = hot_future.await {
-                                app.show_popup(format!(
-                                    "Failed to perform hot withdrawal: {}",
-                                    e
-                                ));
-                                app.log_to_transcript(format!(
-                                    "❌ Hot withdrawal failed: {}",
-                                    e
-                                ));
+                                app.show_popup(format!("Failed to perform hot withdrawal: {}", e));
+                                app.log_to_transcript(format!("❌ Hot withdrawal failed: {}", e));
                             } else {
                                 app.log_to_transcript(
                                     "✅ Hot withdrawal completed successfully".to_string(),
@@ -939,9 +1043,31 @@ pub async fn run_tui() -> Result<Option<String>> {
                                     );
                                 }
                             } else {
-                                app.show_status_message(
-                                    "ℹ️ No transactions to open".to_string(),
-                                );
+                                app.show_status_message("ℹ️ No transactions to open".to_string());
+                            }
+                        }
+                        KeyCode::Char('d') => {
+                            // Decode last transaction
+                            if let Some(last_tx) = app.transactions.last().cloned() {
+                                app.log_to_transcript(format!(
+                                    "🔍 Decoding transaction {}...",
+                                    explorer::format_txid_short(&last_tx.txid)
+                                ));
+
+                                let decode_future = app.decode_transaction(&last_tx.txid);
+                                if let Err(e) = decode_future.await {
+                                    app.show_popup(format!("Failed to decode transaction: {}", e));
+                                    app.log_to_transcript(format!(
+                                        "❌ Transaction decoding failed: {}",
+                                        e
+                                    ));
+                                } else {
+                                    app.log_to_transcript(
+                                        "✅ Transaction decoded successfully".to_string(),
+                                    );
+                                }
+                            } else {
+                                app.show_status_message("ℹ️ No transactions to decode".to_string());
                             }
                         }
                         KeyCode::Char('x') => {
@@ -952,10 +1078,7 @@ pub async fn run_tui() -> Result<Option<String>> {
                                     break;
                                 }
                                 Err(e) => {
-                                    app.show_popup(format!(
-                                        "Failed to generate transcript: {}",
-                                        e
-                                    ));
+                                    app.show_popup(format!("Failed to generate transcript: {}", e));
                                 }
                             }
                         }
@@ -1261,6 +1384,7 @@ fn render_vault_control(f: &mut Frame, area: Rect, app: &App) {
         ❄️  'c' - Emergency Cold Clawback\n\
         🔥 'h' - Hot Withdrawal (after CSV delay)\n\
         🌐 'o' - Open Last Transaction in Explorer\n\
+        🔍 'd' - Decode Last Transaction (script analysis)\n\
         📝 'x' - Export Session Transcript & Exit\n\
         🔄 'r' - Refresh Blockchain Data\n\n\
         💡 All operations use RPC integration - no manual steps!";
@@ -1452,9 +1576,9 @@ fn render_footer_with_status(f: &mut Frame, area: Rect, app: &App) {
 /// Render footer with help text
 fn render_footer(f: &mut Frame, area: Rect, app: &App) {
     let help_text = if app.current_tab == 1 {
-        "🎮 CONTROLS: 'n'=New | 'f'=Fund | 't'=Trigger | 'c'=Clawback | 'h'=Hot | 'o'=Open Last Tx | 'v'=Details | 'x'=Transcript | 'r'=Refresh | 'q'=Quit"
+        "🎮 CONTROLS: 'n'=New | 'f'=Fund | 't'=Trigger | 'c'=Clawback | 'h'=Hot | 'o'=Open Last Tx | 'd'=Decode | 'v'=Details | 'x'=Transcript | 'r'=Refresh | 'q'=Quit"
     } else {
-        "🗂️ NAVIGATION: Tab/1-4=Switch tabs | 'o'=Open Last Tx | 'v'=Vault details | 'x'=Export Transcript | 'r'=Refresh | 'q'=Quit"
+        "🗂️ 'o'=Open Last Tx | 'v'=Vault details | 'x'=Export Transcript | 'd'=Decode Last Tx | 'r'=Refresh | 'q'=Quit"
     };
 
     let footer = Paragraph::new(help_text)
