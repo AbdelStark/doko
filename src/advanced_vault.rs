@@ -1339,4 +1339,446 @@ mod tests {
         assert_eq!(format!("{}", VaultRole::Treasurer), "Treasurer");
         assert_eq!(format!("{}", VaultRole::Operations), "Operations");
     }
+
+    #[test]
+    fn test_delegation_creation() {
+        let mut vault = AdvancedTaprootVault::new(500_000, 144).unwrap();
+        
+        // Create a basic delegation
+        let delegation = vault.create_delegation(
+            100_000,
+            48, // 48 hours
+            "Test delegation",
+            None,
+        ).unwrap();
+        
+        // Verify delegation properties
+        assert_eq!(delegation.message.max_amount, 100_000);
+        assert_eq!(delegation.message.purpose, "Test delegation");
+        assert!(!delegation.message.delegation_id.is_empty());
+        assert!(!delegation.delegator_signature.is_empty());
+        assert!(!delegation.used);
+        
+        // Verify delegation was added to active list
+        assert_eq!(vault.active_delegations.len(), 1);
+        assert_eq!(vault.delegation_history.len(), 0);
+        
+        // Verify delegation signature length (64 bytes hex = 128 chars)
+        assert_eq!(delegation.delegator_signature.len(), 128);
+    }
+
+    #[test]
+    fn test_delegation_from_template() {
+        let mut vault = AdvancedTaprootVault::new(1_000_000, 72).unwrap();
+        
+        // Test daily operations template
+        let daily_delegation = vault.create_delegation_from_template(
+            "daily_ops",
+            None, // Use template default amount
+            None, // Use template default hours
+            None, // Use template default purpose
+        ).unwrap();
+        
+        assert_eq!(daily_delegation.message.max_amount, 50_000);
+        assert_eq!(daily_delegation.message.purpose, "Daily operational expenses");
+        
+        // Test with custom parameters
+        let custom_delegation = vault.create_delegation_from_template(
+            "weekly_ops",
+            Some(300_000), // Custom amount
+            Some(96), // Custom hours (4 days)
+            Some("Custom weekly budget"), // Custom purpose
+        ).unwrap();
+        
+        assert_eq!(custom_delegation.message.max_amount, 300_000);
+        assert_eq!(custom_delegation.message.purpose, "Custom weekly budget");
+        
+        // Verify both delegations are active
+        assert_eq!(vault.active_delegations.len(), 2);
+    }
+
+    #[test]
+    fn test_delegation_validation() {
+        let mut vault = AdvancedTaprootVault::new(250_000, 288).unwrap();
+        
+        // Create a valid delegation
+        let delegation = vault.create_delegation(
+            75_000,
+            2, // 2 hours
+            "Short-term delegation",
+            None,
+        ).unwrap();
+        
+        // Validation should succeed for fresh delegation
+        assert!(vault.validate_delegation(&delegation).is_ok());
+        
+        // Test validation against expected delegator
+        let csfs_ops = CsfsOperations::new(Network::Signet);
+        let current_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        
+        let result = csfs_ops.validate_delegation(
+            &delegation,
+            &vault.treasurer_pubkey,
+            current_time,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_delegation_management() {
+        let mut vault = AdvancedTaprootVault::new(800_000, 144).unwrap();
+        
+        // Create multiple delegations
+        let delegation1 = vault.create_delegation(100_000, 24, "First delegation", None).unwrap();
+        let _delegation2 = vault.create_delegation(150_000, 48, "Second delegation", None).unwrap();
+        
+        assert_eq!(vault.active_delegations.len(), 2);
+        
+        // Test getting active delegations
+        let active = vault.get_active_delegations();
+        assert_eq!(active.len(), 2);
+        
+        // Mark first delegation as used
+        vault.mark_delegation_used(&delegation1.message.delegation_id, Some("test_txid".to_string()));
+        
+        // Should have one active, one in history
+        assert_eq!(vault.active_delegations.len(), 1);
+        assert_eq!(vault.delegation_history.len(), 1);
+        
+        // Verify the used delegation is marked correctly
+        let used_delegation = &vault.delegation_history[0];
+        assert!(used_delegation.used);
+        assert_eq!(used_delegation.usage_txid, Some("test_txid".to_string()));
+    }
+
+    #[test]
+    fn test_ctv_hash_computation() {
+        let vault = AdvancedTaprootVault::new(1_000_000, 144).unwrap();
+        
+        // Test CTV hash computation for trigger transaction
+        let ctv_hash = vault.compute_ctv_hash().unwrap();
+        assert_eq!(ctv_hash.len(), 32); // Should be 32 bytes
+        
+        // Test CTV hash computation for cold recovery
+        let cold_ctv_hash = vault.compute_cold_ctv_hash().unwrap();
+        assert_eq!(cold_ctv_hash.len(), 32);
+        
+        // Hashes should be different
+        assert_ne!(ctv_hash, cold_ctv_hash);
+        
+        // Hash should be deterministic
+        let ctv_hash2 = vault.compute_ctv_hash().unwrap();
+        assert_eq!(ctv_hash, ctv_hash2);
+    }
+
+    #[test]
+    fn test_transaction_templates() {
+        let vault = AdvancedTaprootVault::new(500_000, 72).unwrap();
+        
+        // Test trigger transaction template
+        let trigger_tx = vault.create_trigger_tx_template().unwrap();
+        assert_eq!(trigger_tx.input.len(), 1);
+        assert_eq!(trigger_tx.output.len(), 1);
+        assert_eq!(trigger_tx.version, Version::TWO);
+        
+        // Verify output amount (vault amount minus fee)
+        let expected_output_amount = vault.amount - vault_config::DEFAULT_FEE_SATS;
+        assert_eq!(trigger_tx.output[0].value.to_sat(), expected_output_amount);
+        
+        // Test cold recovery template
+        let cold_tx = vault.create_cold_tx_template().unwrap();
+        assert_eq!(cold_tx.input.len(), 1);
+        assert_eq!(cold_tx.output.len(), 1);
+        assert_eq!(cold_tx.input[0].sequence, Sequence::ZERO); // No delay for cold recovery
+    }
+
+    #[test]
+    fn test_trigger_transaction_creation() {
+        let vault = AdvancedTaprootVault::new(300_000, 144).unwrap();
+        
+        // Create a mock vault outpoint
+        let vault_outpoint = OutPoint {
+            txid: bitcoin::hashes::sha256d::Hash::from_slice(&[1u8; 32]).unwrap().into(),
+            vout: 0,
+        };
+        
+        // Create trigger transaction
+        let trigger_tx = vault.create_trigger_tx(vault_outpoint).unwrap();
+        
+        // Verify transaction structure
+        assert_eq!(trigger_tx.input.len(), 1);
+        assert_eq!(trigger_tx.output.len(), 1);
+        assert_eq!(trigger_tx.input[0].previous_output, vault_outpoint);
+        
+        // Verify witness is populated
+        assert!(!trigger_tx.input[0].witness.is_empty());
+        
+        // Verify output amount
+        let expected_amount = vault.amount - vault_config::DEFAULT_FEE_SATS;
+        assert_eq!(trigger_tx.output[0].value.to_sat(), expected_amount);
+    }
+
+    #[test]
+    fn test_emergency_spend_transaction() {
+        let vault = AdvancedTaprootVault::new(400_000, 144).unwrap();
+        
+        // Create mock trigger outpoint
+        let trigger_outpoint = OutPoint {
+            txid: bitcoin::hashes::sha256d::Hash::from_slice(&[2u8; 32]).unwrap().into(),
+            vout: 0,
+        };
+        
+        // Create emergency spend transaction
+        let emergency_tx = vault.create_emergency_spend_tx(
+            trigger_outpoint,
+            &vault.get_cold_address().unwrap(),
+        ).unwrap();
+        
+        // Verify transaction structure
+        assert_eq!(emergency_tx.input.len(), 1);
+        assert_eq!(emergency_tx.output.len(), 1);
+        assert_eq!(emergency_tx.input[0].previous_output, trigger_outpoint);
+        
+        // Verify witness has correct structure for emergency path
+        let witness = &emergency_tx.input[0].witness;
+        assert!(witness.len() >= 5); // signature + flags + script + control block
+        
+        // Verify sequence allows RBF but no CSV delay
+        assert_eq!(emergency_tx.input[0].sequence, Sequence::ENABLE_RBF_NO_LOCKTIME);
+    }
+
+    #[test]
+    fn test_timelock_spend_transaction() {
+        let vault = AdvancedTaprootVault::new(600_000, 72).unwrap();
+        
+        // Create mock trigger outpoint
+        let trigger_outpoint = OutPoint {
+            txid: bitcoin::hashes::sha256d::Hash::from_slice(&[3u8; 32]).unwrap().into(),
+            vout: 0,
+        };
+        
+        // Create time-delayed spend transaction
+        let timelock_tx = vault.create_timelock_spend_tx(
+            trigger_outpoint,
+            &vault.get_operations_address().unwrap(),
+        ).unwrap();
+        
+        // Verify transaction structure
+        assert_eq!(timelock_tx.input.len(), 1);
+        assert_eq!(timelock_tx.output.len(), 1);
+        
+        // Verify CSV sequence is set correctly
+        assert_eq!(timelock_tx.input[0].sequence, Sequence::from_height(vault.csv_delay as u16));
+        
+        // Verify witness structure for time-delayed path
+        let witness = &timelock_tx.input[0].witness;
+        assert!(witness.len() >= 5); // signature + path flags + script + control block
+    }
+
+    #[test]
+    fn test_cold_recovery_transaction() {
+        let vault = AdvancedTaprootVault::new(750_000, 288).unwrap();
+        
+        // Create mock trigger outpoint
+        let trigger_outpoint = OutPoint {
+            txid: bitcoin::hashes::sha256d::Hash::from_slice(&[4u8; 32]).unwrap().into(),
+            vout: 0,
+        };
+        
+        // Create cold recovery transaction
+        let cold_tx = vault.create_cold_recovery_tx(trigger_outpoint).unwrap();
+        
+        // Verify transaction structure
+        assert_eq!(cold_tx.input.len(), 1);
+        assert_eq!(cold_tx.output.len(), 1);
+        assert_eq!(cold_tx.input[0].previous_output, trigger_outpoint);
+        
+        // Verify sequence is zero (no delay for cold recovery)
+        assert_eq!(cold_tx.input[0].sequence, Sequence::ZERO);
+        
+        // Verify witness structure for cold recovery path (no signatures needed)
+        let witness = &cold_tx.input[0].witness;
+        assert!(witness.len() >= 4); // path flags + script + control block
+        
+        // Verify output goes to cold address
+        let cold_address = vault.get_cold_address().unwrap();
+        let expected_script = Address::from_str(&cold_address)
+            .unwrap()
+            .require_network(vault.network)
+            .unwrap()
+            .script_pubkey();
+        assert_eq!(cold_tx.output[0].script_pubkey, expected_script);
+    }
+
+    #[test]
+    fn test_delegated_spend_transaction() {
+        let mut vault = AdvancedTaprootVault::new(900_000, 144).unwrap();
+        
+        // Create a delegation first
+        let delegation = vault.create_delegation(
+            200_000,
+            24,
+            "Test delegated spend",
+            None,
+        ).unwrap();
+        
+        // Create mock trigger outpoint
+        let trigger_outpoint = OutPoint {
+            txid: bitcoin::hashes::sha256d::Hash::from_slice(&[5u8; 32]).unwrap().into(),
+            vout: 0,
+        };
+        
+        // Create delegated spend transaction
+        let delegated_tx = vault.create_delegated_spend_tx(
+            trigger_outpoint,
+            &delegation,
+            &vault.get_operations_address().unwrap(),
+        ).unwrap();
+        
+        // Verify transaction structure
+        assert_eq!(delegated_tx.input.len(), 1);
+        assert_eq!(delegated_tx.output.len(), 1);
+        
+        // Verify amount respects delegation limit
+        let expected_amount = std::cmp::min(
+            delegation.message.max_amount,
+            vault.amount - vault_config::DEFAULT_FEE_SATS - vault_config::HOT_FEE_SATS
+        );
+        assert_eq!(delegated_tx.output[0].value.to_sat(), expected_amount);
+        
+        // Verify witness structure for delegated path
+        let witness = &delegated_tx.input[0].witness;
+        assert!(witness.len() >= 8); // ops_sig + ops_key + delegation_sig + delegation_msg + flags + script + control
+    }
+
+    #[test]
+    fn test_vault_serialization() {
+        let vault = AdvancedTaprootVault::new(350_000, 168).unwrap();
+        
+        // Test JSON serialization
+        let json = serde_json::to_string_pretty(&vault).unwrap();
+        assert!(!json.is_empty());
+        assert!(json.contains("vault_id"));
+        assert!(json.contains("treasurer_pubkey"));
+        assert!(json.contains("delegation_templates"));
+        
+        // Test deserialization
+        let vault2: AdvancedTaprootVault = serde_json::from_str(&json).unwrap();
+        assert_eq!(vault.vault_id, vault2.vault_id);
+        assert_eq!(vault.amount, vault2.amount);
+        assert_eq!(vault.csv_delay, vault2.csv_delay);
+        assert_eq!(vault.treasurer_pubkey, vault2.treasurer_pubkey);
+    }
+
+    #[test]
+    fn test_file_save_and_load() {
+        let vault = AdvancedTaprootVault::new(450_000, 216).unwrap();
+        let test_file = "/tmp/test_advanced_vault.json";
+        
+        // Save to file
+        vault.save_to_file(test_file).unwrap();
+        
+        // Load from file
+        let loaded_vault = AdvancedTaprootVault::load_from_file(test_file).unwrap();
+        
+        // Verify loaded vault matches original
+        assert_eq!(vault.vault_id, loaded_vault.vault_id);
+        assert_eq!(vault.amount, loaded_vault.amount);
+        assert_eq!(vault.csv_delay, loaded_vault.csv_delay);
+        assert_eq!(vault.treasurer_pubkey, loaded_vault.treasurer_pubkey);
+        assert_eq!(vault.operations_pubkey, loaded_vault.operations_pubkey);
+        assert_eq!(vault.delegation_templates.len(), loaded_vault.delegation_templates.len());
+        
+        // Verify CSFS ops is reinitialized
+        assert!(loaded_vault.csfs_ops.is_some());
+        
+        // Clean up
+        std::fs::remove_file(test_file).ok();
+    }
+
+    #[test]
+    fn test_delegation_expiration() {
+        let mut vault = AdvancedTaprootVault::new(500_000, 144).unwrap();
+        
+        // Create a delegation that expires in 1 hour
+        let delegation = vault.create_delegation(
+            100_000,
+            1, // 1 hour
+            "Short expiration test",
+            None,
+        ).unwrap();
+        
+        // Should be valid immediately
+        assert!(vault.validate_delegation(&delegation).is_ok());
+        
+        // Manually test with future timestamp (simulating expired delegation)
+        let csfs_ops = CsfsOperations::new(Network::Signet);
+        let future_timestamp = delegation.message.expires_at + 3600; // 1 hour after expiration
+        
+        let result = csfs_ops.validate_delegation(
+            &delegation,
+            &vault.treasurer_pubkey,
+            future_timestamp,
+        );
+        
+        // Should fail validation due to expiration
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), VaultError::ExpiredDelegation(_)));
+    }
+
+    #[test]
+    fn test_vault_display() {
+        let vault = AdvancedTaprootVault::new(123_456, 72).unwrap();
+        let display_str = format!("{}", vault);
+        
+        assert!(display_str.contains("Advanced Vault"));
+        assert!(display_str.contains("123456")); // Amount
+        assert!(display_str.contains("72")); // CSV delay
+        assert!(display_str.contains("Active Delegations: 0"));
+    }
+
+    #[test]
+    fn test_advanced_trigger_script_structure() {
+        let vault = AdvancedTaprootVault::new(1_000_000, 144).unwrap();
+        let script = vault.advanced_trigger_script().unwrap();
+        
+        // Verify script contains expected opcodes for four-path structure
+        let script_bytes = script.as_bytes();
+        
+        // Should contain multiple OP_IF/OP_ELSE/OP_ENDIF for nested conditionals
+        let if_count = script_bytes.iter().filter(|&&b| b == OP_IF.to_u8()).count();
+        let else_count = script_bytes.iter().filter(|&&b| b == OP_ELSE.to_u8()).count();
+        let endif_count = script_bytes.iter().filter(|&&b| b == OP_ENDIF.to_u8()).count();
+        
+        assert_eq!(if_count, 3); // Three nested IF statements
+        assert_eq!(else_count, 3); // Three ELSE branches
+        assert_eq!(endif_count, 3); // Three ENDIF closures
+        
+        // Should contain CHECKSIG for signature verification paths
+        let checksig_count = script_bytes.iter().filter(|&&b| b == OP_CHECKSIG.to_u8()).count();
+        assert!(checksig_count >= 2); // Multiple signature paths
+        
+        // Should contain CSV for time-delayed path
+        let csv_present = script_bytes.iter().any(|&b| b == OP_CSV.to_u8());
+        assert!(csv_present);
+    }
+
+    #[test]
+    fn test_invalid_template_name() {
+        let mut vault = AdvancedTaprootVault::new(100_000, 144).unwrap();
+        
+        // Try to use non-existent template
+        let result = vault.create_delegation_from_template(
+            "non_existent_template",
+            None,
+            None,
+            None,
+        );
+        
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), VaultError::InvalidDelegation(_)));
+    }
 }
