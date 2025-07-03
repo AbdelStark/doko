@@ -391,7 +391,6 @@ impl AdvancedTaprootVault {
                     // Witness stack: [ops_sig, delegation_sig, delegation_msg, 1, 0]
                     // After IFs: [ops_sig, delegation_sig, delegation_msg]
                     
-                    // Verify delegation signature with Mutinynet CSFS
                     // Current: [ops_sig, delegation_sig, delegation_msg]
                     // Mutinynet CSFS expects: [delegation_sig, delegation_msg, treasurer_pubkey]
                     // Clean approach using minimal stack operations
@@ -633,7 +632,7 @@ impl AdvancedTaprootVault {
         Ok(Transaction {
             version: Version::TWO,
             lock_time: LockTime::ZERO,
-            input: vec![input],
+            input: vec![input.clone(), input], // Two inputs like reference implementation
             output: vec![output],
         })
     }
@@ -852,8 +851,10 @@ impl AdvancedTaprootVault {
     pub fn create_trigger_tx(&self, vault_outpoint: OutPoint) -> VaultResult<Transaction> {
         let mut trigger_tx = self.create_trigger_tx_template()?;
         
-        // Set the actual input outpoint
+        // Set the actual input outpoint and remove the second input for actual transaction
         trigger_tx.input[0].previous_output = vault_outpoint;
+        // Remove the second input for the actual transaction (it was only needed for CTV hash template)
+        trigger_tx.input.truncate(1);
         
         // For CTV-only vault deposits, the witness is just the script
         let deposit_script = self.ctv_vault_deposit_script()?;
