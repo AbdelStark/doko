@@ -1,3 +1,5 @@
+use crate::config::{files, network, vault as vault_config};
+use crate::error::{VaultError, VaultResult};
 use anyhow::Result;
 use bitcoin::OutPoint;
 use clap::{Parser, Subcommand};
@@ -5,7 +7,6 @@ use std::{env, str::FromStr, time::Duration};
 use tokio::time::sleep;
 
 mod config;
-mod ctv;
 mod error;
 mod explorer_client;
 mod rpc_client;
@@ -29,10 +30,10 @@ enum Commands {
     /// Create a new vault and return the vault address
     CreateVault {
         /// Amount to vault in satoshis
-        #[arg(short, long, default_value = "10000")]
+        #[arg(short, long, default_value_t = vault_config::DEFAULT_DEMO_AMOUNT)]
         amount: u64,
         /// CSV delay in blocks
-        #[arg(short, long, default_value = "10")]
+        #[arg(short, long, default_value_t = vault_config::DEFAULT_CSV_DELAY)]
         delay: u32,
     },
     /// Fund the vault with the specified UTXO
@@ -210,7 +211,7 @@ async fn demo(vault_file: &str) -> Result<()> {
             TaprootVault::load_from_file(vault_file)?
         } else {
             println!("No vault file found. Creating new Taproot vault...");
-            let vault = TaprootVault::new(10000, 10)?;
+            let vault = TaprootVault::new(vault_config::DEFAULT_DEMO_AMOUNT, vault_config::DEFAULT_CSV_DELAY)?;
             vault.save_to_file("taproot_vault.json")?;
             vault
         };
@@ -331,8 +332,7 @@ async fn demo(vault_file: &str) -> Result<()> {
 
     println!();
     println!("🎉 Demo completed! Check the transaction status on a Signet explorer:");
-    println!("   https://mempool.space/signet");
-    println!("   https://blockstream.info/signet");
+    println!("   https://mutinynet.com");
 
     Ok(())
 }
@@ -607,8 +607,8 @@ async fn debug_tx(vault_utxo: &str) -> Result<()> {
     println!("🔍 Debug Transaction Construction\n");
 
     // Load vault from auto_vault.json if it exists, otherwise taproot_vault.json
-    let taproot_vault = if std::path::Path::new("auto_vault.json").exists() {
-        TaprootVault::load_from_file("auto_vault.json")?
+    let taproot_vault = if std::path::Path::new(files::AUTO_VAULT_CONFIG).exists() {
+        TaprootVault::load_from_file(files::AUTO_VAULT_CONFIG)?
     } else {
         TaprootVault::load_from_file("taproot_vault.json")?
     };
@@ -695,7 +695,8 @@ async fn create_cold(trigger_utxo: &str) -> Result<()> {
     println!();
 
     println!("🚀 Broadcast using:");
-    println!("bitcoin-cli -rpcconnect=34.10.114.163 -rpcport=38332 -rpcuser=catnet -rpcpassword=stark sendrawtransaction {}", cold_hex);
+    println!("bitcoin-cli -rpcconnect={} -rpcport={} -rpcuser={} -rpcpassword={} sendrawtransaction {}", 
+        network::DEFAULT_RPC_HOST, network::DEFAULT_RPC_PORT, network::DEFAULT_RPC_USER, network::DEFAULT_RPC_PASSWORD, cold_hex);
 
     Ok(())
 }
@@ -706,16 +707,16 @@ async fn auto_demo(amount: Option<u64>, delay: Option<u32>, scenario: &str) -> R
 
     let amount = amount.unwrap_or_else(|| {
         env::var("DEFAULT_AMOUNT")
-            .unwrap_or_else(|_| "100000".to_string())
+            .unwrap_or_else(|_| vault_config::DEFAULT_DEMO_AMOUNT.to_string())
             .parse()
-            .unwrap_or(100000)
+            .unwrap_or(vault_config::DEFAULT_DEMO_AMOUNT)
     });
 
     let delay = delay.unwrap_or_else(|| {
         env::var("DEFAULT_CSV_DELAY")
-            .unwrap_or_else(|_| "10".to_string())
+            .unwrap_or_else(|_| vault_config::DEFAULT_DEMO_CSV_DELAY.to_string())
             .parse()
-            .unwrap_or(10)
+            .unwrap_or(vault_config::DEFAULT_DEMO_CSV_DELAY)
     });
 
     println!("🏦 DOKO AUTOMATED VAULT DEMO");
@@ -748,7 +749,7 @@ async fn auto_demo(amount: Option<u64>, delay: Option<u32>, scenario: &str) -> R
         amount, delay
     );
     let vault = TaprootVault::new(amount, delay)?;
-    vault.save_to_file("auto_vault.json")?;
+    vault.save_to_file(files::AUTO_VAULT_CONFIG)?;
     println!(" ✅");
 
     let vault_address = vault.get_vault_address()?;
@@ -782,7 +783,7 @@ async fn auto_demo(amount: Option<u64>, delay: Option<u32>, scenario: &str) -> R
             break;
         }
     }
-    
+
     let vault_utxo = OutPoint::new(funding_txid, vault_vout);
     println!("📦 Vault UTXO: {}:{}", funding_txid, vault_vout);
     println!();
@@ -847,7 +848,7 @@ async fn auto_demo(amount: Option<u64>, delay: Option<u32>, scenario: &str) -> R
     }
     println!();
     println!("🔍 View transactions on explorer:");
-    println!("   https://mempool.space/signet");
+    println!("   https://mutinynet.com");
 
     Ok(())
 }
@@ -949,11 +950,11 @@ async fn execute_hot_withdrawal(
     let hot_tx = vault.create_hot_tx(trigger_utxo)?;
     let hot_hex = bitcoin::consensus::encode::serialize_hex(&hot_tx);
     println!(" ✅ TXID: {}", hot_tx.txid());
-    
+
     print!("📡 Broadcasting hot withdrawal transaction...");
     let hot_txid = rpc.send_raw_transaction_hex(&hot_hex)?;
     println!(" ✅ Broadcast successful");
-    
+
     // Wait for confirmation
     print!("⏳ Waiting for hot withdrawal confirmation...");
     loop {
@@ -965,7 +966,7 @@ async fn execute_hot_withdrawal(
         print!(".");
         sleep(Duration::from_secs(2)).await;
     }
-    
+
     println!();
     println!("🔥 HOT WITHDRAWAL COMPLETED!");
     println!("   💰 Amount: {} sats", hot_tx.output[0].value.to_sat());

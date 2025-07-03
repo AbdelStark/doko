@@ -17,6 +17,8 @@
 //! - **Emergency Recovery**: Cold path allows immediate fund recovery
 //! - **Taproot Privacy**: Script details only revealed when spending
 
+use crate::config::vault as vault_config;
+use crate::error::{VaultError, VaultResult};
 use anyhow::{Result, anyhow};
 use bitcoin::{
     hashes::{sha256, Hash},
@@ -516,7 +518,7 @@ impl TaprootVault {
     /// - **Transaction Structure**: Version, locktime, sequence
     /// 
     /// # Fee Handling
-    /// Reserves 1000 sats for mining fees. In production, this should be
+    /// Reserves DEFAULT_FEE_SATS for mining fees. In production, this should be
     /// dynamically calculated based on fee rates and transaction size.
     /// 
     /// # Returns
@@ -526,7 +528,7 @@ impl TaprootVault {
         let trigger_script_pubkey = Address::from_str(&trigger_address)?.require_network(self.network)?.script_pubkey();
         
         let output = TxOut {
-            value: Amount::from_sat(self.amount - 1000), // Reserve for fees
+            value: Amount::from_sat(self.amount - vault_config::DEFAULT_FEE_SATS), // Reserve for fees
             script_pubkey: trigger_script_pubkey,
         };
         
@@ -562,7 +564,7 @@ impl TaprootVault {
     /// - **No Time Delay**: Can be broadcast immediately after trigger
     /// - **No Signature Required**: CTV covenant authorizes the spend
     /// - **Predetermined Destination**: Cold address fixed at vault creation
-    /// - **Fixed Fee**: 2000 sats reserved (total 2000 sats for two transactions)
+    /// - **Fixed Fee**: HOT_FEE_SATS reserved (total HOT_FEE_SATS for two transactions)
     /// 
     /// # Security Design
     /// This transaction allows the vault owner to respond immediately to unauthorized
@@ -570,9 +572,9 @@ impl TaprootVault {
     /// cannot be modified by an attacker.
     /// 
     /// # Fee Structure
-    /// - **Input Amount**: trigger_amount (vault_amount - 1000)
-    /// - **Output Amount**: trigger_amount - 1000 (total fees: 2000 sats)
-    /// - **Reserved Fee**: 1000 sats for cold transaction mining
+    /// - **Input Amount**: trigger_amount (vault_amount - DEFAULT_FEE_SATS)
+    /// - **Output Amount**: trigger_amount - DEFAULT_FEE_SATS (total fees: HOT_FEE_SATS)
+    /// - **Reserved Fee**: DEFAULT_FEE_SATS for cold transaction mining
     /// 
     /// # Returns
     /// A Transaction template for cold recovery CTV hash computation
@@ -584,7 +586,7 @@ impl TaprootVault {
         );
         
         let output = TxOut {
-            value: Amount::from_sat(self.amount - 2000), // Reserve for fees
+            value: Amount::from_sat(self.amount - vault_config::HOT_FEE_SATS), // Reserve for fees
             script_pubkey: cold_address.script_pubkey(),
         };
         
@@ -784,7 +786,7 @@ impl TaprootVault {
         );
         
         let output = TxOut {
-            value: Amount::from_sat(self.amount - 2000),
+            value: Amount::from_sat(self.amount - vault_config::HOT_FEE_SATS),
             script_pubkey: hot_address.script_pubkey(),
         };
         
@@ -820,7 +822,7 @@ impl TaprootVault {
         
         // Create sighash for Taproot script-path spending
         let prevouts = vec![TxOut {
-            value: Amount::from_sat(self.amount - 1000), // trigger output amount
+            value: Amount::from_sat(self.amount - vault_config::DEFAULT_FEE_SATS), // trigger output amount
             script_pubkey: Address::from_str(&self.get_trigger_address()?)?
                 .require_network(self.network)?
                 .script_pubkey(),

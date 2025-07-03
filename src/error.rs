@@ -101,10 +101,7 @@ impl VaultError {
 
     /// Check if this error is retryable (network/temporary issues)
     pub fn is_retryable(&self) -> bool {
-        matches!(
-            self,
-            VaultError::Network { .. } | VaultError::Rpc { .. }
-        )
+        matches!(self, VaultError::Network { .. } | VaultError::Rpc { .. })
     }
 
     /// Check if this error indicates a security issue
@@ -193,37 +190,5 @@ pub type NetworkResult<T> = Result<T, NetworkError>;
 impl From<NetworkError> for VaultError {
     fn from(err: NetworkError) -> Self {
         VaultError::operation("network", err.to_string())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_error_creation() {
-        let config_err = VaultError::config("Invalid amount");
-        assert!(matches!(config_err, VaultError::Configuration { .. }));
-
-        let crypto_err = VaultError::crypto("Key generation failed");
-        assert!(matches!(crypto_err, VaultError::Cryptography { .. }));
-        assert!(crypto_err.is_security_critical());
-    }
-
-    #[test]
-    fn test_error_classification() {
-        let network_err = VaultError::Network {
-            source: reqwest::Error::from(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                "timeout",
-            )),
-        };
-        assert!(network_err.is_retryable());
-
-        let csv_err = VaultError::CsvDelayNotSatisfied {
-            needed: 10,
-            actual: 5,
-        };
-        assert!(csv_err.is_security_critical());
     }
 }

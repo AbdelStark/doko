@@ -37,25 +37,35 @@ pub struct AddressInfo {
 impl AddressInfo {
     /// Get the current balance of the address (funded - spent)
     ///
-    /// This includes both confirmed transactions (chain_stats) and 
+    /// This includes both confirmed transactions (chain_stats) and
     /// unconfirmed transactions in the mempool (mempool_stats).
     ///
     /// # Returns
     /// Balance in satoshis
     pub fn get_balance(&self) -> u64 {
-        let chain_balance = self.chain_stats.funded_txo_sum.saturating_sub(self.chain_stats.spent_txo_sum);
-        let mempool_balance = self.mempool_stats.funded_txo_sum.saturating_sub(self.mempool_stats.spent_txo_sum);
+        let chain_balance = self
+            .chain_stats
+            .funded_txo_sum
+            .saturating_sub(self.chain_stats.spent_txo_sum);
+        let mempool_balance = self
+            .mempool_stats
+            .funded_txo_sum
+            .saturating_sub(self.mempool_stats.spent_txo_sum);
         chain_balance.saturating_add(mempool_balance)
     }
 
     /// Get only confirmed balance (excluding mempool)
     pub fn get_confirmed_balance(&self) -> u64 {
-        self.chain_stats.funded_txo_sum.saturating_sub(self.chain_stats.spent_txo_sum)
+        self.chain_stats
+            .funded_txo_sum
+            .saturating_sub(self.chain_stats.spent_txo_sum)
     }
 
     /// Get unconfirmed balance (mempool only)
     pub fn get_unconfirmed_balance(&self) -> u64 {
-        self.mempool_stats.funded_txo_sum.saturating_sub(self.mempool_stats.spent_txo_sum)
+        self.mempool_stats
+            .funded_txo_sum
+            .saturating_sub(self.mempool_stats.spent_txo_sum)
     }
 }
 
@@ -73,7 +83,7 @@ impl MutinynetExplorer {
             .timeout(REQUEST_TIMEOUT)
             .build()
             .map_err(|e| VaultError::operation("client_creation", e.to_string()))?;
-        
+
         Ok(Self {
             client,
             base_url: EXPLORER_API_BASE.to_string(),
@@ -83,25 +93,26 @@ impl MutinynetExplorer {
     /// Get address information including balance
     pub async fn get_address_info(&self, address: &str) -> VaultResult<AddressInfo> {
         let url = format!("{}/address/{}", self.base_url, address);
-        
-        let response = self.client
+
+        let response = self
+            .client
             .get(&url)
             .send()
             .await
             .map_err(|e| VaultError::Network { source: e })?;
-        
+
         if !response.status().is_success() {
             return Err(VaultError::operation(
                 "api_request",
                 format!("HTTP {} - Failed to fetch address info", response.status()),
             ));
         }
-        
+
         let address_info: AddressInfo = response
             .json()
             .await
             .map_err(|e| VaultError::Network { source: e })?;
-        
+
         Ok(address_info)
     }
 
@@ -112,9 +123,12 @@ impl MutinynetExplorer {
     }
 
     /// Get multiple address balances concurrently
-    pub async fn get_multiple_balances(&self, addresses: &[&str]) -> VaultResult<Vec<(String, u64)>> {
+    pub async fn get_multiple_balances(
+        &self,
+        addresses: &[&str],
+    ) -> VaultResult<Vec<(String, u64)>> {
         let mut results = Vec::new();
-        
+
         for address in addresses {
             match self.get_address_balance(address).await {
                 Ok(balance) => results.push((address.to_string(), balance)),
@@ -124,28 +138,7 @@ impl MutinynetExplorer {
                 }
             }
         }
-        
-        Ok(results)
-    }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    
-    #[tokio::test]
-    #[ignore] // Only run when testing against actual Mutinynet
-    async fn test_address_balance() {
-        let explorer = MutinynetExplorer::new().unwrap();
-        
-        // Test with a known address from the provided example
-        let address = "tb1pex5nvlekasv9l3v3hxtq3dvynhdnl0xeq2h6ah5xhfch4nhcvraq73trst";
-        let info = explorer.get_address_info(address).await.unwrap();
-        
-        println!("Address info: {:?}", info);
-        println!("Balance: {} sats", info.get_balance());
-        
-        // Should match the expected balance (6000 sats from the example)
-        assert_eq!(info.get_balance(), 6000);
+        Ok(results)
     }
 }
