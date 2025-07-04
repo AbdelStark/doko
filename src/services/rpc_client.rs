@@ -76,9 +76,32 @@ impl MutinynetClient {
 
     /// Broadcast a raw transaction (Transaction struct)
     pub fn send_raw_transaction(&self, tx: &Transaction) -> VaultResult<Txid> {
-        let txid = self.client.send_raw_transaction(tx)
-            .map_err(|e| VaultError::Rpc { source: e })?;
-        Ok(txid)
+        // Retry logic for network reliability
+        let mut last_error = None;
+        for attempt in 1..=3 {
+            match self.client.send_raw_transaction(tx) {
+                Ok(txid) => return Ok(txid),
+                Err(e) => {
+                    let error_msg = e.to_string();
+                    last_error = Some(VaultError::Rpc { source: e });
+                    
+                    // Check if it's a network error worth retrying
+                    if error_msg.contains("timeout") || 
+                       error_msg.contains("connection") || 
+                       error_msg.contains("network") ||
+                       error_msg.contains("Internal error") {
+                        eprintln!("⚠️  Network error on attempt {}/3: {}", attempt, error_msg);
+                        std::thread::sleep(std::time::Duration::from_millis(1000 * attempt));
+                        continue;
+                    } else {
+                        // Script or validation error, don't retry
+                        return Err(last_error.unwrap());
+                    }
+                }
+            }
+        }
+        
+        Err(last_error.unwrap_or_else(|| VaultError::operation("send_raw_transaction", "All retry attempts failed".to_string())))
     }
 
     /// Get a raw transaction with verbose information
