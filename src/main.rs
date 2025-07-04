@@ -23,13 +23,14 @@
 //! ```
 
 use anyhow::Result;
-use bitcoin::OutPoint;
+use bitcoin::{OutPoint, Network, Amount};
 use clap::{Parser, Subcommand};
 use std::{str::FromStr, time::Duration};
 use tokio::time::sleep;
 
 mod config;
 mod csfs_primitives;
+mod csfs_test;
 mod error;
 mod services;
 mod tui;
@@ -38,6 +39,8 @@ mod vaults;
 use config::vault as vault_config;
 use services::MutinynetClient;
 use vaults::{AdvancedTaprootVault, TaprootVault};
+use csfs_primitives::CsfsOperations;
+use csfs_test::CsfsTest;
 
 /// Vault implementation type
 #[derive(Clone, Debug)]
@@ -97,6 +100,18 @@ enum Commands {
         #[arg(long, default_value = "simple")]
         vault_type: VaultType,
     },
+    /// Debug CSFS opcode on Mutinynet
+    DebugCsfs {
+        /// Message to sign (hex string)
+        #[arg(short, long)]
+        message: Option<String>,
+        /// Private key for signing (hex string)
+        #[arg(short, long)]
+        private_key: Option<String>,
+        /// Test operation: sign, verify, script, broadcast
+        #[arg(short, long, default_value = "sign")]
+        operation: String,
+    },
 }
 
 #[tokio::main]
@@ -123,6 +138,13 @@ async fn main() -> Result<()> {
                 tui::run_advanced_tui().await?;
             }
         },
+        Commands::DebugCsfs {
+            message,
+            private_key,
+            operation,
+        } => {
+            debug_csfs(message, private_key, &operation).await?;
+        }
     }
 
     Ok(())
@@ -651,4 +673,268 @@ async fn execute_cold_recovery_advanced(
     println!("   🔒 CTV covenant enforced - no signatures required!");
 
     Ok(())
+}
+
+async fn debug_csfs(
+    message: Option<String>,
+    private_key: Option<String>,
+    operation: &str,
+) -> Result<()> {
+    println!("🔬 CSFS DEBUG TOOL FOR MUTINYNET");
+    println!("══════════════════════════════════");
+    println!("Testing OP_CHECKSIGFROMSTACK (Mutinynet implementation)");
+    println!("⚠️  Note: Non-BIP348 compliant - uses opcode 0xcc, Tapscript only");
+    println!();
+
+    let csfs_test = CsfsTest::new(Network::Signet);
+    
+    match operation {
+        "sign" => {
+            println!("✍️  BIP-340 Schnorr Signature Generation");
+            println!("─────────────────────────────────────────");
+            
+            // Generate test keys if not provided
+            let (test_private_key, test_public_key) = if private_key.is_none() {
+                csfs_test.generate_keypair()?
+            } else {
+                (private_key.unwrap(), "".to_string())
+            };
+            
+            let message_bytes = if let Some(msg) = message {
+                hex::decode(&msg).unwrap_or_else(|_| msg.as_bytes().to_vec())
+            } else {
+                b"Hello CSFS on Mutinynet".to_vec()
+            };
+            
+            println!("📝 Message: {} ({})", 
+                String::from_utf8_lossy(&message_bytes), 
+                hex::encode(&message_bytes)
+            );
+            println!("📏 Message Length: {} bytes", message_bytes.len());
+            println!("🔑 Private Key: {}", test_private_key);
+            
+            let signature = csfs_test.sign_message(&message_bytes, &test_private_key)?;
+            println!("✍️  Signature: {}", signature);
+            
+            // If we generated keys, show the public key and verify
+            if !test_public_key.is_empty() {
+                println!("🔓 Public Key: {}", test_public_key);
+                
+                let is_valid = csfs_test.verify_signature(&message_bytes, &signature, &test_public_key)?;
+                println!("✅ Signature Valid: {}", is_valid);
+            }
+        }
+        "verify" => {
+            println!("🔍 Signature Verification Test");
+            println!("───────────────────────────────");
+            
+            let (test_private_key, test_public_key) = csfs_test.generate_keypair()?;
+            let message_bytes = b"Test message for CSFS verification";
+            
+            println!("📝 Message: {}", String::from_utf8_lossy(message_bytes));
+            println!("🔑 Generated Private Key: {}", test_private_key);
+            println!("🔓 Generated Public Key: {}", test_public_key);
+            
+            let signature = csfs_test.sign_message(message_bytes, &test_private_key)?;
+            println!("✍️  Generated Signature: {}", signature);
+            
+            let is_valid = csfs_test.verify_signature(message_bytes, &signature, &test_public_key)?;
+            println!("✅ Verification Result: {}", is_valid);
+            
+            // Test with wrong message
+            let wrong_message = b"Wrong message";
+            let is_invalid = csfs_test.verify_signature(wrong_message, &signature, &test_public_key)?;
+            println!("❌ Wrong Message Verification: {}", is_invalid);
+        }
+        "script" => {
+            println!("📜 CSFS Script Generation Test");
+            println!("───────────────────────────────");
+            
+            let (_, test_public_key) = csfs_test.generate_keypair()?;
+            
+            println!("🔓 Test Public Key: {}", test_public_key);
+            println!();
+            
+            // Create simple CSFS script
+            println!("🔹 Simple CSFS Script:");
+            let simple_script = csfs_test.create_simple_csfs_script(&test_public_key)?;
+            println!("{}", csfs_test.debug_script(&simple_script));
+            
+            // Create delegation CSFS script  
+            println!("🔹 Delegation CSFS Script:");
+            let delegation_script = csfs_test.create_delegation_csfs_script(&test_public_key)?;
+            println!("{}", csfs_test.debug_script(&delegation_script));
+            
+            println!("✅ Using opcode 0xcc (204) for OP_CHECKSIGFROMSTACK");
+            println!("   Based on Mutinynet implementation (benthecarman/bitcoin fork)");
+            println!("   ⚠️  Note: Non-BIP348 compliant - Tapscript only, different stack order");
+        }
+        "broadcast" => {
+            println!("📡 CSFS REAL TRANSACTION TEST ON MUTINYNET");
+            println!("═══════════════════════════════════════════");
+            println!("Testing actual CSFS opcode with real transactions!");
+            println!();
+            
+            // Connect to Mutinynet
+            let rpc = MutinynetClient::new()?;
+            println!("🔌 Connected to Mutinynet: {}", rpc.get_wallet_name());
+            println!("📡 Block height: {}", rpc.get_block_count()?);
+            println!();
+            
+            // Generate test keys and data
+            let (test_private_key, test_public_key) = csfs_test.generate_keypair()?;
+            let message = b"REAL CSFS TEST ON MUTINYNET";
+            let signature = csfs_test.sign_message(message, &test_private_key)?;
+            
+            println!("🔑 Generated Test Keys:");
+            println!("   Private: {}", test_private_key);
+            println!("   Public:  {}", test_public_key);
+            println!("📝 Test Message: {}", String::from_utf8_lossy(message));
+            println!("✍️  CSFS Signature: {}", signature);
+            println!();
+            
+            // Create simple CSFS script for testing
+            let csfs_script = csfs_test.create_simple_csfs_script(&test_public_key)?;
+            println!("📜 CSFS Script ({} bytes): {}", csfs_script.len(), hex::encode(csfs_script.as_bytes()));
+            
+            // Verify signature off-chain first
+            println!("🔍 Off-chain signature verification...");
+            let verification_result = csfs_test.verify_signature(message, &signature, &test_public_key)?;
+            println!("✅ Off-chain verification: {}", verification_result);
+            
+            // Create taproot address with CSFS script using NUMS point
+            let (csfs_address, _leaf_hash, _taproot_spend_info) = csfs_test.create_csfs_taproot_address(&csfs_script)?;
+            println!("🏠 CSFS Taproot Address: {}", csfs_address);
+            println!();
+            
+            // Step 1: Fund the CSFS address
+            println!("💰 STEP 1: FUNDING CSFS ADDRESS");
+            println!("────────────────────────────────");
+            let fund_amount = 0.001; // 100,000 sats
+            println!("Funding {} BTC to CSFS address...", fund_amount);
+            
+            let funding_txid = rpc.fund_address(&csfs_address.to_string(), fund_amount)?;
+            println!("✅ Funding TXID: {}", funding_txid);
+            
+            // Wait for confirmation
+            print!("⏳ Waiting for funding confirmation");
+            while rpc.get_confirmations(&funding_txid)? == 0 {
+                print!(".");
+                std::io::Write::flush(&mut std::io::stdout())?;
+                tokio::time::sleep(Duration::from_secs(3)).await;
+            }
+            println!(" ✅ {} confirmations", rpc.get_confirmations(&funding_txid)?);
+            
+            let funding_outpoint = OutPoint::new(funding_txid, 0);
+            let funding_amount = Amount::from_btc(fund_amount)?;
+            println!("📦 Funding UTXO: {}", funding_outpoint);
+            println!();
+            
+            // Step 2: Create and broadcast CSFS spending transaction
+            println!("🚀 STEP 2: SPENDING WITH CSFS");
+            println!("──────────────────────────────");
+            
+            // Create destination address (hot wallet)
+            let destination_address = rpc.get_new_address()?;
+            println!("🎯 Destination: {}", destination_address);
+            
+            let fee = Amount::from_sat(1000); // 1000 sats fee
+            println!("💸 Fee: {} sats", fee.to_sat());
+            
+            // Create the CSFS spending transaction
+            println!("🔨 Creating CSFS spending transaction...");
+            let spending_tx = csfs_test.create_csfs_spending_transaction(
+                funding_outpoint,
+                funding_amount,
+                &csfs_script,
+                &signature,
+                message,
+                &test_public_key,
+                &destination_address,
+                fee,
+            )?;
+            
+            println!("📄 Transaction created:");
+            println!("   Inputs: {}", spending_tx.input.len());
+            println!("   Outputs: {}", spending_tx.output.len());
+            println!("   Witness items: {}", spending_tx.input[0].witness.len());
+            println!("   Output amount: {} sats", spending_tx.output[0].value.to_sat());
+            println!();
+            
+            // Broadcast the transaction
+            println!("📡 Broadcasting CSFS transaction to Mutinynet...");
+            match rpc.send_raw_transaction(&spending_tx) {
+                Ok(spend_txid) => {
+                    println!("✅ SUCCESS! CSFS transaction broadcast!");
+                    println!("🎉 Spending TXID: {}", spend_txid);
+                    println!();
+                    
+                    // Wait for confirmation
+                    print!("⏳ Waiting for spending confirmation");
+                    while rpc.get_confirmations(&spend_txid)? == 0 {
+                        print!(".");
+                        std::io::Write::flush(&mut std::io::stdout())?;
+                        tokio::time::sleep(Duration::from_secs(3)).await;
+                    }
+                    println!(" ✅ {} confirmations", rpc.get_confirmations(&spend_txid)?);
+                    
+                    println!();
+                    println!("🎊 CSFS TEST COMPLETED SUCCESSFULLY!");
+                    println!("════════════════════════════════════");
+                    println!("✅ CSFS opcode 0xcc working on Mutinynet");
+                    println!("✅ Tapscript execution successful");
+                    println!("✅ Stack order [sig, msg, pubkey] validated");
+                    println!("✅ BIP-340 Schnorr signatures accepted");
+                    println!();
+                    println!("🔍 View transactions:");
+                    println!("   Funding:  https://mutinynet.com/tx/{}", funding_txid);
+                    println!("   Spending: https://mutinynet.com/tx/{}", spend_txid);
+                }
+                Err(e) => {
+                    println!("❌ CSFS transaction FAILED!");
+                    println!("Error: {}", e);
+                    println!();
+                    println!("🔍 Debug Information:");
+                    println!("📄 Raw Transaction: {}", hex::encode(bitcoin::consensus::serialize(&spending_tx)));
+                    println!();
+                    println!("🧾 Witness Stack:");
+                    for (i, item) in spending_tx.input[0].witness.iter().enumerate() {
+                        println!("   {}: {} ({} bytes)", i, hex::encode(item), item.len());
+                    }
+                    println!();
+                    println!("💡 Possible Issues:");
+                    println!("   • CSFS opcode might not be 0xcc on this Mutinynet version");
+                    println!("   • Stack order might be different than expected");
+                    println!("   • Script structure incompatible with Mutinynet CSFS");
+                    println!("   • Taproot construction error");
+                }
+            }
+        }
+        _ => {
+            println!("❌ Unknown operation: {}", operation);
+            println!("Available operations:");
+            println!("  sign      - Test BIP-340 signature generation");
+            println!("  verify    - Test signature verification");
+            println!("  script    - Generate CSFS scripts with actual opcode");
+            println!("  broadcast - Test transaction creation (dry run)");
+        }
+    }
+    
+    Ok(())
+}
+
+fn generate_test_keypair() -> Result<(String, String)> {
+    use bitcoin::secp256k1::{Secp256k1, SecretKey, Keypair};
+    use bitcoin::key::XOnlyPublicKey;
+    
+    let secp = Secp256k1::new();
+    let private_key_bytes = [0x01u8; 32]; // Simple test key
+    let secret_key = SecretKey::from_slice(&private_key_bytes)?;
+    let keypair = Keypair::from_secret_key(&secp, &secret_key);
+    let (public_key, _) = XOnlyPublicKey::from_keypair(&keypair);
+    
+    Ok((
+        hex::encode(private_key_bytes),
+        hex::encode(public_key.serialize()),
+    ))
 }

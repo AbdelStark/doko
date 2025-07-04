@@ -1,6 +1,6 @@
 use crate::config::{env as config_env, network};
 use crate::error::{VaultError, VaultResult};
-use bitcoin::{Transaction, Txid};
+use bitcoin::{Transaction, Txid, Address};
 use bitcoincore_rpc::{Auth, Client, RpcApi};
 use serde_json::Value;
 use std::{env, str::FromStr};
@@ -52,6 +52,18 @@ impl MutinynetClient {
             .map_err(|e| VaultError::Rpc { source: e })?;
         Txid::from_str(&result)
             .map_err(|e| VaultError::operation("parse_txid", e.to_string()))
+    }
+
+    /// Get a new address from the wallet
+    pub fn get_new_address(&self) -> VaultResult<Address> {
+        let result = self
+            .client
+            .call::<String>("getnewaddress", &[])
+            .map_err(|e| VaultError::Rpc { source: e })?;
+        Address::from_str(&result)
+            .map_err(|e| VaultError::operation("parse_address", e.to_string()))?
+            .require_network(bitcoin::Network::Signet)
+            .map_err(|e| VaultError::operation("validate_address_network", e.to_string()))
     }
 
     /// Get the number of confirmations for a transaction
