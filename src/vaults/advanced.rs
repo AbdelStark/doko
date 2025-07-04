@@ -202,13 +202,66 @@ impl AdvancedTaprootVault {
     /// - In production, keys should be derived from secure seed phrases
     /// - Cold storage keys should be kept offline after generation
     pub fn new(amount: u64, csv_delay: u32) -> Result<Self> {
+        Self::new_with_seed(amount, csv_delay, None)
+    }
+
+    /// Create a new Advanced Taproot vault with optional deterministic key generation.
+    ///
+    /// For testing purposes, keys can be generated deterministically from a seed.
+    /// For production use, pass None to use secure random key generation.
+    ///
+    /// # Arguments
+    /// * `amount` - The amount to be protected in the vault (in satoshis)
+    /// * `csv_delay` - The CSV (CheckSequenceVerify) delay for time-locked operations
+    /// * `seed` - Optional seed for deterministic key generation (testing only)
+    ///
+    /// # Returns
+    /// A new AdvancedTaprootVault instance
+    pub fn new_with_seed(amount: u64, csv_delay: u32, seed: Option<[u8; 32]>) -> Result<Self> {
         let secp = Secp256k1::new();
         
-        // Generate cryptographically secure key pairs for all roles
-        let treasurer_privkey = SecretKey::new(&mut thread_rng());
-        let operations_privkey = SecretKey::new(&mut thread_rng());
-        let cold_privkey = SecretKey::new(&mut thread_rng());
-        let ops_vault_privkey = SecretKey::new(&mut thread_rng());
+        // Generate private keys (deterministic if seed provided, random otherwise)
+        let (treasurer_privkey, operations_privkey, cold_privkey, ops_vault_privkey) = if let Some(seed) = seed {
+            // Deterministic key generation for testing
+            use bitcoin::hashes::{sha256, Hash, HashEngine};
+            let mut engine = sha256::Hash::engine();
+            engine.input(&seed);
+            engine.input(b"treasurer");
+            let treasurer_hash = sha256::Hash::from_engine(engine);
+            let treasurer_privkey = SecretKey::from_slice(&treasurer_hash[..])
+                .map_err(|e| anyhow!("Treasurer key generation failed: {}", e))?;
+
+            let mut engine = sha256::Hash::engine();
+            engine.input(&seed);
+            engine.input(b"operations");
+            let operations_hash = sha256::Hash::from_engine(engine);
+            let operations_privkey = SecretKey::from_slice(&operations_hash[..])
+                .map_err(|e| anyhow!("Operations key generation failed: {}", e))?;
+
+            let mut engine = sha256::Hash::engine();
+            engine.input(&seed);
+            engine.input(b"cold");
+            let cold_hash = sha256::Hash::from_engine(engine);
+            let cold_privkey = SecretKey::from_slice(&cold_hash[..])
+                .map_err(|e| anyhow!("Cold key generation failed: {}", e))?;
+
+            let mut engine = sha256::Hash::engine();
+            engine.input(&seed);
+            engine.input(b"ops_vault");
+            let ops_vault_hash = sha256::Hash::from_engine(engine);
+            let ops_vault_privkey = SecretKey::from_slice(&ops_vault_hash[..])
+                .map_err(|e| anyhow!("Ops vault key generation failed: {}", e))?;
+
+            (treasurer_privkey, operations_privkey, cold_privkey, ops_vault_privkey)
+        } else {
+            // Random key generation for production
+            let treasurer_privkey = SecretKey::new(&mut thread_rng());
+            let operations_privkey = SecretKey::new(&mut thread_rng());
+            let cold_privkey = SecretKey::new(&mut thread_rng());
+            let ops_vault_privkey = SecretKey::new(&mut thread_rng());
+            
+            (treasurer_privkey, operations_privkey, cold_privkey, ops_vault_privkey)
+        };
         
         // Derive secp256k1 public keys
         let treasurer_secp_pubkey = Secp256k1PublicKey::from_secret_key(&secp, &treasurer_privkey);
@@ -483,11 +536,6 @@ impl AdvancedTaprootVault {
             .map_err(|e| VaultError::Other(format!("NUMS point error: {}", e)))?;
         let secp = Secp256k1::new();
         
-        // DEBUG: Print vault address generation details  
-        eprintln!("🏠 DEBUG VAULT ADDRESS GENERATION:");
-        eprintln!("   Deposit script len: {} bytes", deposit_script.len());
-        eprintln!("   Deposit script hex: {}", hex::encode(deposit_script.as_bytes()));
-        
         let spend_info = TaprootBuilder::new()
             .add_leaf(0, deposit_script.clone())
             .map_err(|e| VaultError::Other(format!("Taproot builder error: {:?}", e)))?
@@ -495,7 +543,6 @@ impl AdvancedTaprootVault {
             .map_err(|e| VaultError::Other(format!("Taproot finalization error: {:?}", e)))?;
             
         let address = Address::p2tr_tweaked(spend_info.output_key(), self.network);
-        eprintln!("   🏠 Vault address: {}", address);
         
         Ok(address.to_string())
     }
@@ -513,10 +560,6 @@ impl AdvancedTaprootVault {
             .map_err(|e| VaultError::Other(format!("NUMS point error: {}", e)))?;
         let secp = Secp256k1::new();
         
-        eprintln!("⚡ DEBUG TRIGGER ADDRESS GENERATION:");
-        eprintln!("   Trigger script len: {} bytes", trigger_script.len());
-        eprintln!("   Trigger script hex: {}", hex::encode(trigger_script.as_bytes()));
-        
         let spend_info = TaprootBuilder::new()
             .add_leaf(0, trigger_script)
             .map_err(|e| VaultError::Other(format!("Taproot builder error: {:?}", e)))?
@@ -524,7 +567,6 @@ impl AdvancedTaprootVault {
             .map_err(|e| VaultError::Other(format!("Taproot finalization error: {:?}", e)))?;
             
         let address = Address::p2tr_tweaked(spend_info.output_key(), self.network);
-        eprintln!("   ⚡ Trigger address: {}", address);
         Ok(address.to_string())
     }
 
@@ -568,12 +610,6 @@ impl AdvancedTaprootVault {
         let txn = self.create_trigger_tx_template()?;
         
         // DEBUG: Print trigger transaction details
-        eprintln!("🔍 DEBUG CTV HASH COMPUTATION:");
-        eprintln!("   Trigger TX outputs: {}", txn.output.len());
-        for (i, output) in txn.output.iter().enumerate() {
-            eprintln!("   Output[{}]: {} sats to {}", i, output.value.to_sat(), hex::encode(&output.script_pubkey));
-        }
-        
         // Reference implementation from simple_covenant_vault_rust.md
         // This matches the exact CTV hash computation that works
         let mut buffer = Vec::new();
@@ -615,7 +651,6 @@ impl AdvancedTaprootVault {
             .map_err(|e| VaultError::Other(format!("Input index encoding error: {}", e)))?;
         
         let hash = sha256::Hash::hash(&buffer);
-        eprintln!("   📊 Computed CTV hash: {}", hex::encode(hash.to_byte_array()));
         Ok(hash.to_byte_array())
     }
 
@@ -692,12 +727,15 @@ impl AdvancedTaprootVault {
             witness: Witness::new(),
         };
         
-        Ok(Transaction {
+        let template_tx = Transaction {
             version: Version::TWO,
             lock_time: LockTime::ZERO,
             input: vec![input], // Single input for actual consistency
             output: vec![output],
-        })
+        };
+        
+        
+        Ok(template_tx)
     }
 
     /// Create the cold recovery transaction template for CTV hash computation.
@@ -931,11 +969,6 @@ impl AdvancedTaprootVault {
         
         let _leaf_hash = TapLeafHash::from_script(&deposit_script, LeafVersion::TapScript);
         
-        // DEBUG: Print trigger transaction witness creation details
-        eprintln!("🚀 DEBUG TRIGGER TX WITNESS CREATION:");
-        eprintln!("   Deposit script len: {} bytes", deposit_script.len());
-        eprintln!("   Deposit script hex: {}", hex::encode(deposit_script.as_bytes()));
-        
         // Create witness: [script, control_block]
         let mut witness = Witness::new();
         witness.push(deposit_script.to_bytes());
@@ -943,8 +976,6 @@ impl AdvancedTaprootVault {
         let control_block = spend_info
             .control_block(&(deposit_script.clone(), LeafVersion::TapScript))
             .expect("Script should be in tree");
-        eprintln!("   Control block len: {} bytes", control_block.serialize().len());
-        eprintln!("   Control block hex: {}", hex::encode(control_block.serialize()));
         
         witness.push(control_block.serialize());
         

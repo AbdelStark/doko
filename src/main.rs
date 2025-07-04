@@ -267,7 +267,9 @@ async fn advanced_vault_auto_demo(amount: u64, delay: u32, scenario: &str) -> Re
     println!("└─────────────────────────────────────────────────────────────┘");
     println!();
 
-    let mut vault = AdvancedTaprootVault::new(amount, delay)?;
+    // Use deterministic keys for testing to ensure reproducible results
+    let test_seed = [0u8; 32]; // Fixed seed for consistent testing
+    let mut vault = AdvancedTaprootVault::new_with_seed(amount, delay, Some(test_seed))?;
     println!(
         "🏗️  Creating Advanced Taproot vault ({} sats, {} block delay)... ✅",
         amount, delay
