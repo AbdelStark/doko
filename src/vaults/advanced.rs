@@ -487,6 +487,7 @@ impl AdvancedTaprootVault {
             .map_err(|e| VaultError::Other(format!("Input index encoding error: {}", e)))?;
         let cold_ctv_hash = sha256::Hash::hash(&data).to_byte_array();
         
+        
         // Advanced CSFS script with proper delegation validation
         Ok(Builder::new()
             .push_opcode(OP_IF)
@@ -536,6 +537,10 @@ impl AdvancedTaprootVault {
             .map_err(|e| VaultError::Other(format!("NUMS point error: {}", e)))?;
         let secp = Secp256k1::new();
         
+        eprintln!("🏠 VAULT ADDRESS GENERATION:");
+        eprintln!("   Deposit script: {}", hex::encode(deposit_script.as_bytes()));
+        eprintln!("   NUMS point: {}", hex::encode(nums_point.serialize()));
+        
         let spend_info = TaprootBuilder::new()
             .add_leaf(0, deposit_script.clone())
             .map_err(|e| VaultError::Other(format!("Taproot builder error: {:?}", e)))?
@@ -543,6 +548,8 @@ impl AdvancedTaprootVault {
             .map_err(|e| VaultError::Other(format!("Taproot finalization error: {:?}", e)))?;
             
         let address = Address::p2tr_tweaked(spend_info.output_key(), self.network);
+        eprintln!("   Output key: {}", hex::encode(spend_info.output_key().serialize()));
+        eprintln!("   Address: {}", address);
         
         Ok(address.to_string())
     }
@@ -651,6 +658,8 @@ impl AdvancedTaprootVault {
             .map_err(|e| VaultError::Other(format!("Input index encoding error: {}", e)))?;
         
         let hash = sha256::Hash::hash(&buffer);
+        
+        
         Ok(hash.to_byte_array())
     }
 
@@ -969,6 +978,11 @@ impl AdvancedTaprootVault {
         
         let _leaf_hash = TapLeafHash::from_script(&deposit_script, LeafVersion::TapScript);
         
+        eprintln!("🔍 TRIGGER TX WITNESS CREATION:");
+        eprintln!("   Deposit script: {}", hex::encode(deposit_script.as_bytes()));
+        eprintln!("   NUMS point: {}", hex::encode(nums_point.serialize()));
+        eprintln!("   Output key: {}", hex::encode(spend_info.output_key().serialize()));
+        
         // Create witness: [script, control_block]
         let mut witness = Witness::new();
         witness.push(deposit_script.to_bytes());
@@ -976,6 +990,8 @@ impl AdvancedTaprootVault {
         let control_block = spend_info
             .control_block(&(deposit_script.clone(), LeafVersion::TapScript))
             .expect("Script should be in tree");
+        
+        eprintln!("   Control block: {}", hex::encode(control_block.serialize()));
         
         witness.push(control_block.serialize());
         
