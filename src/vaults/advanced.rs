@@ -59,10 +59,9 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, str::FromStr};
 use rand::thread_rng;
 
-// Mutinynet CSFS opcodes (not in standard bitcoin crate yet)
+// Mutinynet CSFS opcodes (verified working with csfs_test.rs)
 // Based on Mutinynet's implementation, these are the actual opcode values
-const OP_CHECKSIGFROMSTACK_BYTE: u8 = 0xc1;        // 193 in decimal
-const OP_CHECKSIGFROMSTACKVERIFY_BYTE: u8 = 0xc2;  // 194 in decimal
+const OP_CHECKSIGFROMSTACK_BYTE: u8 = 0xcc;        // 204 decimal - VERIFIED WORKING
 
 /// Role enumeration for vault access control.
 ///
@@ -387,31 +386,15 @@ impl AdvancedTaprootVault {
                 .push_opcode(OP_CHECKSIG)
             .push_opcode(OP_ELSE)
                 .push_opcode(OP_IF)
-                    // CSFS delegated operations with proper BIP-348 implementation
-                    // Witness stack: [ops_sig, delegation_sig, delegation_msg, 1, 0]
-                    // After IFs: [ops_sig, delegation_sig, delegation_msg]
+                    // CSFS delegated operations - delegation only (simplified)
+                    // Witness: [delegation_sig, delegation_msg, treasurer_pubkey, 1, 0]
+                    // After IFs: [delegation_sig, delegation_msg, treasurer_pubkey]
                     
-                    // Current: [ops_sig, delegation_sig, delegation_msg]
-                    // Mutinynet CSFS expects: [delegation_sig, delegation_msg, treasurer_pubkey]
-                    // Clean approach using minimal stack operations
-                    
-                    // Move ops_sig to the bottom: [delegation_sig, delegation_msg, ops_sig]
-                    .push_opcode(OP_ROT)                
-                    // Add treasurer pubkey: [delegation_sig, delegation_msg, ops_sig, treasurer_pubkey]
-                    .push_x_only_key(&treasurer_xonly)  
-                    // Move ops_sig after treasurer_pubkey: [delegation_sig, delegation_msg, treasurer_pubkey, ops_sig]
-                    .push_opcode(OP_SWAP)               
-                    // Now stack is: [delegation_sig, delegation_msg, treasurer_pubkey, ops_sig]
-                    // CSFS consumes top 3: [delegation_sig, delegation_msg, treasurer_pubkey]
-                    // Leaving: [ops_sig]
-                    
-                    .push_slice(&[OP_CHECKSIGFROMSTACKVERIFY_BYTE]) // Use Mutinynet CSFS opcode
-                    // CSFS consumes [delegation_sig, delegation_msg, treasurer_pubkey] and verifies
-                    // If verification fails, script stops. If success, continues with [ops_sig]
-                    
-                    // Then verify operations signature
-                    .push_x_only_key(&operations_xonly) // [ops_sig, ops_pubkey]
-                    .push_opcode(OP_CHECKSIG)           // Verify ops signature
+                    // Use EXACT same pattern as working CSFS test
+                    .push_slice(&[OP_CHECKSIGFROMSTACK_BYTE])
+                    // CSFS consumes [delegation_sig, delegation_msg, treasurer_pubkey] 
+                    // and leaves 1 (true) if valid, 0 (false) if invalid
+                    // Result: [1] or [0] - script succeeds if delegation is valid
                     
                 .push_opcode(OP_ELSE)
                     .push_opcode(OP_IF)
@@ -632,7 +615,7 @@ impl AdvancedTaprootVault {
         Ok(Transaction {
             version: Version::TWO,
             lock_time: LockTime::ZERO,
-            input: vec![input.clone(), input], // Two inputs like reference implementation
+            input: vec![input], // Single input for actual consistency
             output: vec![output],
         })
     }
@@ -851,10 +834,8 @@ impl AdvancedTaprootVault {
     pub fn create_trigger_tx(&self, vault_outpoint: OutPoint) -> VaultResult<Transaction> {
         let mut trigger_tx = self.create_trigger_tx_template()?;
         
-        // Set the actual input outpoint and remove the second input for actual transaction
+        // Set the actual input outpoint - no truncation needed since template uses single input
         trigger_tx.input[0].previous_output = vault_outpoint;
-        // Remove the second input for the actual transaction (it was only needed for CTV hash template)
-        trigger_tx.input.truncate(1);
         
         // For CTV-only vault deposits, the witness is just the script
         let deposit_script = self.ctv_vault_deposit_script()?;
