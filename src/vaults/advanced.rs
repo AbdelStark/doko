@@ -58,6 +58,7 @@ use bitcoin::{
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, str::FromStr};
 use rand::thread_rng;
+use hex;
 
 // Mutinynet CSFS opcodes (verified working with csfs_test.rs)
 // Based on Mutinynet's implementation, these are the actual opcode values
@@ -427,13 +428,20 @@ impl AdvancedTaprootVault {
             .map_err(|e| VaultError::Other(format!("NUMS point error: {}", e)))?;
         let secp = Secp256k1::new();
         
+        // DEBUG: Print vault address generation details  
+        eprintln!("🏠 DEBUG VAULT ADDRESS GENERATION:");
+        eprintln!("   Deposit script len: {} bytes", deposit_script.len());
+        eprintln!("   Deposit script hex: {}", hex::encode(deposit_script.as_bytes()));
+        
         let spend_info = TaprootBuilder::new()
-            .add_leaf(0, deposit_script)
+            .add_leaf(0, deposit_script.clone())
             .map_err(|e| VaultError::Other(format!("Taproot builder error: {:?}", e)))?
             .finalize(&secp, nums_point)
             .map_err(|e| VaultError::Other(format!("Taproot finalization error: {:?}", e)))?;
             
         let address = Address::p2tr_tweaked(spend_info.output_key(), self.network);
+        eprintln!("   🏠 Vault address: {}", address);
+        
         Ok(address.to_string())
     }
 
@@ -498,50 +506,44 @@ impl AdvancedTaprootVault {
     fn compute_ctv_hash(&self) -> VaultResult<[u8; 32]> {
         let trigger_tx = self.create_trigger_tx_template()?;
         
-        // BIP-119 CTV hash implementation - matches reference implementation
-        // Based on simple_covenant_vault_rust.md reference
-        let mut buffer = Vec::new();
-        
-        // Version (4 bytes)
-        trigger_tx.version.consensus_encode(&mut buffer)
+        // EXACT copy of working simple vault CTV hash computation
+        let mut data = Vec::new();
+        trigger_tx.version.consensus_encode(&mut data)
             .map_err(|e| VaultError::Other(format!("Version encoding error: {}", e)))?;
-            
-        // Locktime (4 bytes)
-        trigger_tx.lock_time.consensus_encode(&mut buffer)
+        trigger_tx.lock_time.consensus_encode(&mut data)
             .map_err(|e| VaultError::Other(format!("Locktime encoding error: {}", e)))?;
         
-        // Number of inputs (4 bytes)
-        (trigger_tx.input.len() as u32).consensus_encode(&mut buffer)
+        // Number of inputs
+        (trigger_tx.input.len() as u32).consensus_encode(&mut data)
             .map_err(|e| VaultError::Other(format!("Input count encoding error: {}", e)))?;
         
-        // Sequences hash (32 bytes) - hash of all input sequences
-        let mut sequences_data = Vec::new();
+        // Sequences hash
+        let mut sequences = Vec::new();
         for input in &trigger_tx.input {
-            input.sequence.consensus_encode(&mut sequences_data)
+            input.sequence.consensus_encode(&mut sequences)
                 .map_err(|e| VaultError::Other(format!("Sequence encoding error: {}", e)))?;
         }
-        let sequences_hash = sha256::Hash::hash(&sequences_data);
-        buffer.extend_from_slice(&sequences_hash[..]);
+        let sequences_hash = sha256::Hash::hash(&sequences);
+        data.extend_from_slice(&sequences_hash[..]);
         
-        // Number of outputs (4 bytes)  
-        (trigger_tx.output.len() as u32).consensus_encode(&mut buffer)
+        // Number of outputs
+        (trigger_tx.output.len() as u32).consensus_encode(&mut data)
             .map_err(|e| VaultError::Other(format!("Output count encoding error: {}", e)))?;
         
-        // Outputs hash (32 bytes) - hash of all outputs
-        let mut outputs_data = Vec::new();
+        // Outputs hash
+        let mut outputs = Vec::new();
         for output in &trigger_tx.output {
-            output.consensus_encode(&mut outputs_data)
+            output.consensus_encode(&mut outputs)
                 .map_err(|e| VaultError::Other(format!("Output encoding error: {}", e)))?;
         }
-        let outputs_hash = sha256::Hash::hash(&outputs_data);
-        buffer.extend_from_slice(&outputs_hash[..]);
+        let outputs_hash = sha256::Hash::hash(&outputs);
+        data.extend_from_slice(&outputs_hash[..]);
         
-        // Input index (4 bytes) - always 0 for single input vault
-        0u32.consensus_encode(&mut buffer)
+        // Input index
+        0u32.consensus_encode(&mut data)
             .map_err(|e| VaultError::Other(format!("Input index encoding error: {}", e)))?;
         
-        // Final hash
-        let hash = sha256::Hash::hash(&buffer);
+        let hash = sha256::Hash::hash(&data);
         Ok(hash.to_byte_array())
     }
 
@@ -555,48 +557,39 @@ impl AdvancedTaprootVault {
     fn compute_cold_ctv_hash(&self) -> VaultResult<[u8; 32]> {
         let cold_tx = self.create_cold_tx_template()?;
         
-        // BIP-119 CTV hash implementation - matches reference implementation
-        let mut buffer = Vec::new();
-        
-        // Version (4 bytes)
-        cold_tx.version.consensus_encode(&mut buffer)
+        // EXACT copy of working simple vault cold CTV hash computation
+        let mut data = Vec::new();
+        cold_tx.version.consensus_encode(&mut data)
             .map_err(|e| VaultError::Other(format!("Version encoding error: {}", e)))?;
-            
-        // Locktime (4 bytes)
-        cold_tx.lock_time.consensus_encode(&mut buffer)
+        cold_tx.lock_time.consensus_encode(&mut data)
             .map_err(|e| VaultError::Other(format!("Locktime encoding error: {}", e)))?;
         
-        // Number of inputs (4 bytes)
-        (cold_tx.input.len() as u32).consensus_encode(&mut buffer)
+        (cold_tx.input.len() as u32).consensus_encode(&mut data)
             .map_err(|e| VaultError::Other(format!("Input count encoding error: {}", e)))?;
         
-        // Sequences hash (32 bytes)
-        let mut sequences_data = Vec::new();
+        let mut sequences = Vec::new();
         for input in &cold_tx.input {
-            input.sequence.consensus_encode(&mut sequences_data)
+            input.sequence.consensus_encode(&mut sequences)
                 .map_err(|e| VaultError::Other(format!("Sequence encoding error: {}", e)))?;
         }
-        let sequences_hash = sha256::Hash::hash(&sequences_data);
-        buffer.extend_from_slice(&sequences_hash[..]);
+        let sequences_hash = sha256::Hash::hash(&sequences);
+        data.extend_from_slice(&sequences_hash[..]);
         
-        // Number of outputs (4 bytes)
-        (cold_tx.output.len() as u32).consensus_encode(&mut buffer)
+        (cold_tx.output.len() as u32).consensus_encode(&mut data)
             .map_err(|e| VaultError::Other(format!("Output count encoding error: {}", e)))?;
         
-        // Outputs hash (32 bytes)
-        let mut outputs_data = Vec::new();
+        let mut outputs = Vec::new();
         for output in &cold_tx.output {
-            output.consensus_encode(&mut outputs_data)
+            output.consensus_encode(&mut outputs)
                 .map_err(|e| VaultError::Other(format!("Output encoding error: {}", e)))?;
         }
-        let outputs_hash = sha256::Hash::hash(&outputs_data);
-        buffer.extend_from_slice(&outputs_hash[..]);
+        let outputs_hash = sha256::Hash::hash(&outputs);
+        data.extend_from_slice(&outputs_hash[..]);
         
-        // Input index (4 bytes)
-        0u32.consensus_encode(&mut buffer)
+        0u32.consensus_encode(&mut data)
             .map_err(|e| VaultError::Other(format!("Input index encoding error: {}", e)))?;
         
-        let hash = sha256::Hash::hash(&buffer);
+        let hash = sha256::Hash::hash(&data);
         Ok(hash.to_byte_array())
     }
 
@@ -866,15 +859,22 @@ impl AdvancedTaprootVault {
         
         let _leaf_hash = TapLeafHash::from_script(&deposit_script, LeafVersion::TapScript);
         
+        // DEBUG: Print trigger transaction witness creation details
+        eprintln!("🚀 DEBUG TRIGGER TX WITNESS CREATION:");
+        eprintln!("   Deposit script len: {} bytes", deposit_script.len());
+        eprintln!("   Deposit script hex: {}", hex::encode(deposit_script.as_bytes()));
+        
         // Create witness: [script, control_block]
         let mut witness = Witness::new();
         witness.push(deposit_script.to_bytes());
-        witness.push(
-            spend_info
-                .control_block(&(deposit_script.clone(), LeafVersion::TapScript))
-                .expect("Script should be in tree")
-                .serialize(),
-        );
+        
+        let control_block = spend_info
+            .control_block(&(deposit_script.clone(), LeafVersion::TapScript))
+            .expect("Script should be in tree");
+        eprintln!("   Control block len: {} bytes", control_block.serialize().len());
+        eprintln!("   Control block hex: {}", hex::encode(control_block.serialize()));
+        
+        witness.push(control_block.serialize());
         
         trigger_tx.input[0].witness = witness;
         
@@ -1080,9 +1080,8 @@ impl AdvancedTaprootVault {
         
         let operations_signature = secp.sign_schnorr(&msg, &operations_keypair);
         
-        // For Tapscript, need to append sighash type (0x01 for SIGHASH_ALL)
-        let mut operations_sig_bytes = operations_signature.as_ref().to_vec();
-        operations_sig_bytes.push(0x01); // SIGHASH_ALL
+        // For Tapscript CHECKSIG, use raw 64-byte signature (no sighash type appended)
+        let operations_sig_bytes = operations_signature.as_ref().to_vec();
 
         // Get CSFS operations to serialize delegation message for CSFS validation
         let csfs_ops = self.get_csfs_ops().clone();
@@ -1115,7 +1114,7 @@ impl AdvancedTaprootVault {
 
         let mut witness = Witness::new();
         // Operations manager transaction signature (for final CHECKSIG in delegated path)
-        witness.push(&operations_sig_bytes); // Operations signature for CHECKSIG (with sighash type)
+        witness.push(&operations_sig_bytes); // Operations signature for CHECKSIG (64 bytes, no sighash type)
         
         // CSFS witness stack - provide sig, msg, pubkey for CSFS verification
         // Script expects [delegation_sig, delegation_msg, treasurer_pubkey] on stack before CSFS
