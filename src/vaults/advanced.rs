@@ -375,9 +375,64 @@ impl AdvancedTaprootVault {
     fn advanced_trigger_script(&self) -> VaultResult<ScriptBuf> {
         let treasurer_xonly = XOnlyPublicKey::from_str(&self.treasurer_pubkey)
             .map_err(|e| VaultError::InvalidPublicKey(format!("Invalid treasurer pubkey: {}", e)))?;
-        let operations_xonly = XOnlyPublicKey::from_str(&self.operations_pubkey)
+        let _operations_xonly = XOnlyPublicKey::from_str(&self.operations_pubkey)
             .map_err(|e| VaultError::InvalidPublicKey(format!("Invalid operations pubkey: {}", e)))?;
-        let cold_ctv_hash = self.compute_cold_ctv_hash()?;
+        
+        // Break circular dependency by computing cold CTV hash independently
+        // This creates a simplified cold recovery transaction template without depending on trigger address
+        let cold_address = self.get_cold_address()?;
+        let cold_script_pubkey = Address::from_str(&cold_address)
+            .map_err(|e| VaultError::Other(format!("Invalid cold address: {}", e)))?
+            .require_network(self.network)
+            .map_err(|e| VaultError::Other(format!("Network mismatch: {}", e)))?
+            .script_pubkey();
+            
+        let cold_output = TxOut {
+            value: Amount::from_sat(self.amount - vault_config::HOT_FEE_SATS),
+            script_pubkey: cold_script_pubkey,
+        };
+        
+        let cold_input = TxIn {
+            previous_output: OutPoint::null(),
+            script_sig: ScriptBuf::new(),
+            sequence: Sequence::ZERO,
+            witness: Witness::new(),
+        };
+        
+        let cold_tx = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![cold_input],
+            output: vec![cold_output],
+        };
+        
+        // Simple CTV hash computation without circular dependencies
+        let mut data = Vec::new();
+        cold_tx.version.consensus_encode(&mut data)
+            .map_err(|e| VaultError::Other(format!("Version encoding error: {}", e)))?;
+        cold_tx.lock_time.consensus_encode(&mut data)
+            .map_err(|e| VaultError::Other(format!("Locktime encoding error: {}", e)))?;
+        (cold_tx.input.len() as u32).consensus_encode(&mut data)
+            .map_err(|e| VaultError::Other(format!("Input count encoding error: {}", e)))?;
+        let mut sequences = Vec::new();
+        for input in &cold_tx.input {
+            input.sequence.consensus_encode(&mut sequences)
+                .map_err(|e| VaultError::Other(format!("Sequence encoding error: {}", e)))?;
+        }
+        let sequences_hash = sha256::Hash::hash(&sequences);
+        data.extend_from_slice(&sequences_hash[..]);
+        (cold_tx.output.len() as u32).consensus_encode(&mut data)
+            .map_err(|e| VaultError::Other(format!("Output count encoding error: {}", e)))?;
+        let mut outputs = Vec::new();
+        for output in &cold_tx.output {
+            output.consensus_encode(&mut outputs)
+                .map_err(|e| VaultError::Other(format!("Output encoding error: {}", e)))?;
+        }
+        let outputs_hash = sha256::Hash::hash(&outputs);
+        data.extend_from_slice(&outputs_hash[..]);
+        0u32.consensus_encode(&mut data)
+            .map_err(|e| VaultError::Other(format!("Input index encoding error: {}", e)))?;
+        let cold_ctv_hash = sha256::Hash::hash(&data).to_byte_array();
         
         // Advanced CSFS script with proper delegation validation
         Ok(Builder::new()
@@ -458,6 +513,10 @@ impl AdvancedTaprootVault {
             .map_err(|e| VaultError::Other(format!("NUMS point error: {}", e)))?;
         let secp = Secp256k1::new();
         
+        eprintln!("⚡ DEBUG TRIGGER ADDRESS GENERATION:");
+        eprintln!("   Trigger script len: {} bytes", trigger_script.len());
+        eprintln!("   Trigger script hex: {}", hex::encode(trigger_script.as_bytes()));
+        
         let spend_info = TaprootBuilder::new()
             .add_leaf(0, trigger_script)
             .map_err(|e| VaultError::Other(format!("Taproot builder error: {:?}", e)))?
@@ -465,6 +524,7 @@ impl AdvancedTaprootVault {
             .map_err(|e| VaultError::Other(format!("Taproot finalization error: {:?}", e)))?;
             
         let address = Address::p2tr_tweaked(spend_info.output_key(), self.network);
+        eprintln!("   ⚡ Trigger address: {}", address);
         Ok(address.to_string())
     }
 
@@ -500,50 +560,62 @@ impl AdvancedTaprootVault {
     ///
     /// This implements the BIP-119 OP_CHECKTEMPLATEVERIFY hash computation for
     /// the trigger transaction that spends from the vault to the trigger output.
+    /// Uses the exact same method as the reference implementation.
     ///
     /// # Returns
     /// 32-byte CTV hash for the trigger transaction template
     fn compute_ctv_hash(&self) -> VaultResult<[u8; 32]> {
-        let trigger_tx = self.create_trigger_tx_template()?;
+        let txn = self.create_trigger_tx_template()?;
         
-        // EXACT copy of working simple vault CTV hash computation
-        let mut data = Vec::new();
-        trigger_tx.version.consensus_encode(&mut data)
+        // DEBUG: Print trigger transaction details
+        eprintln!("🔍 DEBUG CTV HASH COMPUTATION:");
+        eprintln!("   Trigger TX outputs: {}", txn.output.len());
+        for (i, output) in txn.output.iter().enumerate() {
+            eprintln!("   Output[{}]: {} sats to {}", i, output.value.to_sat(), hex::encode(&output.script_pubkey));
+        }
+        
+        // Reference implementation from simple_covenant_vault_rust.md
+        // This matches the exact CTV hash computation that works
+        let mut buffer = Vec::new();
+        
+        // version
+        txn.version.consensus_encode(&mut buffer)
             .map_err(|e| VaultError::Other(format!("Version encoding error: {}", e)))?;
-        trigger_tx.lock_time.consensus_encode(&mut data)
+        // locktime 
+        txn.lock_time.consensus_encode(&mut buffer)
             .map_err(|e| VaultError::Other(format!("Locktime encoding error: {}", e)))?;
-        
-        // Number of inputs
-        (trigger_tx.input.len() as u32).consensus_encode(&mut data)
+        // inputs len
+        (txn.input.len() as u32).consensus_encode(&mut buffer)
             .map_err(|e| VaultError::Other(format!("Input count encoding error: {}", e)))?;
         
-        // Sequences hash
-        let mut sequences = Vec::new();
-        for input in &trigger_tx.input {
-            input.sequence.consensus_encode(&mut sequences)
+        // sequences hash
+        let mut sequences_data = Vec::new();
+        for input in &txn.input {
+            input.sequence.consensus_encode(&mut sequences_data)
                 .map_err(|e| VaultError::Other(format!("Sequence encoding error: {}", e)))?;
         }
-        let sequences_hash = sha256::Hash::hash(&sequences);
-        data.extend_from_slice(&sequences_hash[..]);
+        let sequences_hash = sha256::Hash::hash(&sequences_data);
+        buffer.extend_from_slice(&sequences_hash[..]);
         
-        // Number of outputs
-        (trigger_tx.output.len() as u32).consensus_encode(&mut data)
+        // outputs len
+        (txn.output.len() as u32).consensus_encode(&mut buffer)
             .map_err(|e| VaultError::Other(format!("Output count encoding error: {}", e)))?;
         
-        // Outputs hash
-        let mut outputs = Vec::new();
-        for output in &trigger_tx.output {
-            output.consensus_encode(&mut outputs)
+        // outputs hash
+        let mut outputs_data = Vec::new();
+        for output in &txn.output {
+            output.consensus_encode(&mut outputs_data)
                 .map_err(|e| VaultError::Other(format!("Output encoding error: {}", e)))?;
         }
-        let outputs_hash = sha256::Hash::hash(&outputs);
-        data.extend_from_slice(&outputs_hash[..]);
+        let outputs_hash = sha256::Hash::hash(&outputs_data);
+        buffer.extend_from_slice(&outputs_hash[..]);
         
-        // Input index
-        0u32.consensus_encode(&mut data)
+        // input index
+        0u32.consensus_encode(&mut buffer)
             .map_err(|e| VaultError::Other(format!("Input index encoding error: {}", e)))?;
         
-        let hash = sha256::Hash::hash(&data);
+        let hash = sha256::Hash::hash(&buffer);
+        eprintln!("   📊 Computed CTV hash: {}", hex::encode(hash.to_byte_array()));
         Ok(hash.to_byte_array())
     }
 

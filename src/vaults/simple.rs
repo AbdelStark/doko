@@ -398,39 +398,42 @@ impl TaprootVault {
     /// # Returns
     /// 32-byte CTV hash that will be embedded in the vault deposit script
     fn compute_ctv_hash(&self) -> Result<[u8; 32]> {
-        let trigger_tx = self.create_trigger_tx_template()?;
+        let txn = self.create_trigger_tx_template()?;
         
-        // Simplified CTV hash for now - should use TxCommitmentSpec
-        let mut data = Vec::new();
-        trigger_tx.version.consensus_encode(&mut data)?;
-        trigger_tx.lock_time.consensus_encode(&mut data)?;
+        // Reference implementation from simple_covenant_vault_rust.md
+        // This matches the exact CTV hash computation that works
+        let mut buffer = Vec::new();
         
-        // Number of inputs
-        (trigger_tx.input.len() as u32).consensus_encode(&mut data)?;
+        // version
+        txn.version.consensus_encode(&mut buffer)?;
+        // locktime 
+        txn.lock_time.consensus_encode(&mut buffer)?;
+        // inputs len
+        (txn.input.len() as u32).consensus_encode(&mut buffer)?;
         
-        // Sequences hash
-        let mut sequences = Vec::new();
-        for input in &trigger_tx.input {
-            input.sequence.consensus_encode(&mut sequences)?;
+        // sequences hash
+        let mut sequences_data = Vec::new();
+        for input in &txn.input {
+            input.sequence.consensus_encode(&mut sequences_data)?;
         }
-        let sequences_hash = sha256::Hash::hash(&sequences);
-        data.extend_from_slice(&sequences_hash[..]);
+        let sequences_hash = sha256::Hash::hash(&sequences_data);
+        buffer.extend_from_slice(&sequences_hash[..]);
         
-        // Number of outputs
-        (trigger_tx.output.len() as u32).consensus_encode(&mut data)?;
+        // outputs len
+        (txn.output.len() as u32).consensus_encode(&mut buffer)?;
         
-        // Outputs hash
-        let mut outputs = Vec::new();
-        for output in &trigger_tx.output {
-            output.consensus_encode(&mut outputs)?;
+        // outputs hash
+        let mut outputs_data = Vec::new();
+        for output in &txn.output {
+            output.consensus_encode(&mut outputs_data)?;
         }
-        let outputs_hash = sha256::Hash::hash(&outputs);
-        data.extend_from_slice(&outputs_hash[..]);
+        let outputs_hash = sha256::Hash::hash(&outputs_data);
+        buffer.extend_from_slice(&outputs_hash[..]);
         
-        // Input index
-        0u32.consensus_encode(&mut data)?;
+        // input index
+        0u32.consensus_encode(&mut buffer)?;
         
-        let hash = sha256::Hash::hash(&data);
+        let hash = sha256::Hash::hash(&buffer);
         Ok(hash.to_byte_array())
     }
 

@@ -303,10 +303,16 @@ impl CsfsOperations {
         let pubkey = XOnlyPublicKey::from_slice(&pubkey_bytes)
             .map_err(|e| VaultError::InvalidPublicKey(format!("Invalid public key format: {}", e)))?;
         
-        // Hash the message (same as in signing)
-        let message_hash = sha256::Hash::hash(message);
-        let message_for_verification = Message::from_digest_slice(&message_hash[..])
-            .map_err(|e| VaultError::SigningError(format!("Invalid message hash: {}", e)))?;
+        // Match the signing logic: 32-byte messages are already hashed, others need hashing
+        let message_for_verification = if message.len() == 32 {
+            Message::from_digest_slice(message)
+                .map_err(|e| VaultError::SigningError(format!("Invalid message hash: {}", e)))?
+        } else {
+            // Hash the message using SHA256 (same as in signing)
+            let message_hash = sha256::Hash::hash(message);
+            Message::from_digest_slice(&message_hash[..])
+                .map_err(|e| VaultError::SigningError(format!("Invalid message hash: {}", e)))?
+        };
         
         // Verify signature
         match self.secp.verify_schnorr(&signature, &message_for_verification, &pubkey) {
