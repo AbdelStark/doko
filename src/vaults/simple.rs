@@ -911,62 +911,6 @@ impl TaprootVault {
         Ok(address.to_string())
     }
 
-    /// Save the vault configuration to a JSON file.
-    /// 
-    /// This method serializes the entire vault configuration including all private
-    /// keys, public keys, and parameters to a JSON file for persistence and recovery.
-    /// 
-    /// # Security Warning
-    /// The saved file contains private keys in hex format. In production:
-    /// - Encrypt the file before saving
-    /// - Store in a secure location
-    /// - Consider using hardware security modules (HSMs)
-    /// - Implement proper key backup procedures
-    /// 
-    /// # File Format
-    /// The file is saved as pretty-printed JSON with all vault parameters:
-    /// ```json
-    /// {
-    ///   "vault_privkey": "hex_encoded_private_key",
-    ///   "hot_privkey": "hex_encoded_private_key",
-    ///   "cold_privkey": "hex_encoded_private_key",
-    ///   "vault_pubkey": "hex_encoded_xonly_pubkey",
-    ///   ...
-    /// }
-    /// ```
-    /// 
-    /// # Parameters
-    /// * `filename` - Path where the vault configuration will be saved
-    /// 
-    /// # Returns
-    /// Result indicating success or failure of the file operation
-    pub fn save_to_file(&self, filename: &str) -> Result<()> {
-        let json = serde_json::to_string_pretty(self)?;
-        std::fs::write(filename, json)?;
-        Ok(())
-    }
-    
-    /// Load a vault configuration from a JSON file.
-    /// 
-    /// This method deserializes a previously saved vault configuration, allowing
-    /// recovery of vault operations and key material.
-    /// 
-    /// # Security Considerations
-    /// - Verify file integrity before loading
-    /// - Ensure file permissions are restrictive
-    /// - Consider file encryption for production use
-    /// - Validate loaded parameters for consistency
-    /// 
-    /// # Parameters
-    /// * `filename` - Path to the saved vault configuration file
-    /// 
-    /// # Returns
-    /// A TaprootVault instance loaded from the file, or an error if loading fails
-    pub fn load_from_file(filename: &str) -> Result<Self> {
-        let json = std::fs::read_to_string(filename)?;
-        let vault: TaprootVault = serde_json::from_str(&json)?;
-        Ok(vault)
-    }
 
 }
 

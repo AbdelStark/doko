@@ -6,6 +6,7 @@ use thiserror::Error;
 
 /// Main error type for vault operations
 #[derive(Error, Debug)]
+#[allow(dead_code)]
 pub enum VaultError {
     /// JSON serialization/deserialization errors
     #[error("JSON error: {source}")]

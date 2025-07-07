@@ -22,8 +22,8 @@
 //! doko dashboard --vault-type hybrid
 //! ```
 
-use anyhow::{anyhow, Result};
-use bitcoin::{OutPoint, Network, Amount, Address};
+use anyhow::Result;
+use bitcoin::{OutPoint, Network, Amount};
 use clap::{Parser, Subcommand};
 use std::{str::FromStr, time::Duration};
 use tokio::time::sleep;
@@ -387,9 +387,9 @@ async fn hybrid_vault_auto_demo(amount: u64, delay: u32, scenario: &str) -> Resu
     println!();
 
     let (hot_privkey, hot_pubkey) = generate_test_keypair(1)?;
-    let (cold_privkey, cold_pubkey) = generate_test_keypair(2)?;
+    let (_, cold_pubkey) = generate_test_keypair(2)?;
     let (treasurer_privkey, treasurer_pubkey) = generate_test_keypair(3)?;
-    let (operations_privkey, operations_pubkey) = generate_test_keypair(4)?;
+    let (_, operations_pubkey) = generate_test_keypair(4)?;
 
     println!("🔑 Generated Corporate Keys:");
     println!("   🔥 Hot Wallet:      {}", hot_pubkey);
@@ -406,11 +406,9 @@ async fn hybrid_vault_auto_demo(amount: u64, delay: u32, scenario: &str) -> Resu
         hot_pubkey,
         hot_privkey,
         cold_pubkey,
-        cold_privkey,
         treasurer_pubkey,
         treasurer_privkey,
         operations_pubkey,
-        operations_privkey,
     };
 
     let vault = HybridAdvancedVault::new(config);

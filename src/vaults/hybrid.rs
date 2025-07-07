@@ -69,16 +69,12 @@ pub struct HybridVaultConfig {
     pub hot_privkey: String,
     /// Cold wallet public key (for emergency recovery)
     pub cold_pubkey: String,
-    /// Cold wallet private key (for emergency signing)
-    pub cold_privkey: String,
     /// Treasurer public key (for CSFS delegation authorization)
     pub treasurer_pubkey: String,
     /// Treasurer private key (for CSFS delegation signing)
     pub treasurer_privkey: String,
     /// Operations public key (delegation recipient)
     pub operations_pubkey: String,
-    /// Operations private key (for delegated spending)
-    pub operations_privkey: String,
 }
 
 /// The hybrid advanced vault combining CTV and CSFS capabilities
@@ -185,39 +181,6 @@ impl HybridAdvancedVault {
         Ok(ScriptBuf::from(vec![OP_CHECKSIGFROMSTACK]))
     }
 
-    /// Compute CTV hash for trigger transaction (same as working simple vault)
-    fn compute_trigger_ctv_hash(&self) -> Result<[u8; 32]> {
-        let trigger_tx = self.create_trigger_tx_template()?;
-        
-        // Exact CTV hash computation (same as working simple vault)
-        let mut data = Vec::new();
-        trigger_tx.version.consensus_encode(&mut data)?;
-        trigger_tx.lock_time.consensus_encode(&mut data)?;
-        
-        (trigger_tx.input.len() as u32).consensus_encode(&mut data)?;
-        
-        let mut sequences = Vec::new();
-        for input in &trigger_tx.input {
-            input.sequence.consensus_encode(&mut sequences)?;
-        }
-        let sequences_hash = sha256::Hash::hash(&sequences);
-        data.extend_from_slice(&sequences_hash[..]);
-        
-        (trigger_tx.output.len() as u32).consensus_encode(&mut data)?;
-        
-        let mut outputs = Vec::new();
-        for output in &trigger_tx.output {
-            output.consensus_encode(&mut outputs)?;
-        }
-        let outputs_hash = sha256::Hash::hash(&outputs);
-        data.extend_from_slice(&outputs_hash[..]);
-        
-        // Input index component
-        0u32.consensus_encode(&mut data)?;
-        
-        let hash = sha256::Hash::hash(&data);
-        Ok(hash.to_byte_array())
-    }
 
     /// Create trigger transaction template (same pattern as working simple vault)
     fn create_trigger_tx_template(&self) -> Result<Transaction> {
@@ -427,30 +390,6 @@ impl HybridAdvancedVault {
         Ok(tx)
     }
 
-    /// Create trigger transaction (step 1 of vault spending)
-    /// 
-    /// This creates the trigger transaction that initiates the vault unvaulting process.
-    /// Follows the same pattern as the working simple vault.
-    pub fn create_trigger_transaction(&self, vault_utxo: OutPoint) -> Result<Transaction> {
-        let mut tx = self.create_trigger_tx_template()?;
-        tx.input[0].previous_output = vault_utxo;
-        
-        // Add Taproot witness for simple CTV script (same as working vault)
-        let ctv_script = self.create_ctv_covenant_script()?;
-        let spend_info = self.create_vault_spend_info()?;
-        
-        let control_block = spend_info
-            .control_block(&(ctv_script.clone(), LeafVersion::TapScript))
-            .ok_or_else(|| anyhow!("Failed to create control block for CTV script"))?;
-        
-        // Create simple witness for CTV spending (same as working vault)
-        let mut witness = Witness::new();
-        witness.push(ctv_script.to_bytes());
-        witness.push(control_block.serialize());
-        
-        tx.input[0].witness = witness;
-        Ok(tx)
-    }
 
     /// Create a transaction for CTV cold recovery (proper trigger transaction)
     /// 
@@ -478,56 +417,6 @@ impl HybridAdvancedVault {
         Ok(tx)
     }
     
-    /// Create a demo CSFS transaction to show the multi-path architecture works
-    fn create_csfs_demo_transaction(&self, vault_utxo: OutPoint) -> Result<Transaction> {
-        let cold_address = Address::p2tr_tweaked(
-            bitcoin::key::TweakedPublicKey::dangerous_assume_tweaked(
-                XOnlyPublicKey::from_str(&self.config.cold_pubkey)?
-            ),
-            self.config.network
-        );
-        
-        let mut tx = Transaction {
-            version: Version::TWO,
-            lock_time: LockTime::ZERO,
-            input: vec![TxIn {
-                previous_output: vault_utxo,
-                script_sig: ScriptBuf::new(),
-                sequence: Sequence::ZERO,
-                witness: Witness::new(),
-            }],
-            output: vec![TxOut {
-                value: Amount::from_sat(self.config.amount - 2000), // 2000 sats fee
-                script_pubkey: cold_address.script_pubkey(),
-            }],
-        };
-
-        // Use CSFS path instead of CTV path to demonstrate multi-path works
-        let spend_info = self.create_vault_spend_info()?;
-        let csfs_script = ScriptBuf::from(vec![OP_CHECKSIGFROMSTACK]);
-        
-        let control_block = spend_info
-            .control_block(&(csfs_script.clone(), LeafVersion::TapScript))
-            .ok_or_else(|| anyhow!("Failed to create control block for CSFS script"))?;
-        
-        // Create CSFS witness (same pattern as working CSFS implementation)
-        let test_message = b"HYBRID VAULT CSFS DEMO";
-        let signature = self.sign_message(test_message, &self.config.treasurer_privkey)?;
-        let signature_bytes = hex::decode(&signature)?;
-        let pubkey_bytes = hex::decode(&self.config.treasurer_pubkey)?;
-
-        let message_hash = sha256::Hash::hash(test_message);
-
-        let mut witness = Witness::new();
-        witness.push(&signature_bytes);               // Delegation signature
-        witness.push(message_hash.as_byte_array());   // Delegation message hash
-        witness.push(&pubkey_bytes);                  // Treasurer public key
-        witness.push(csfs_script.to_bytes());         // CSFS script
-        witness.push(control_block.serialize());      // Control block
-        
-        tx.input[0].witness = witness;
-        Ok(tx)
-    }
 
     /// Create a CSFS delegation message for emergency authorization
     /// 
@@ -620,6 +509,7 @@ impl HybridAdvancedVault {
 
 /// Information about a hybrid vault instance
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct VaultInfo {
     pub address: String,
     pub amount: u64,
@@ -644,11 +534,9 @@ mod tests {
             hot_pubkey: "5f7e3f4c2d1a8b9e6f4d2a1b3c5e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e".to_string(),
             hot_privkey: "1f2e3d4c5b6a7980fe8d9c0b1a2934857f6e5d4c3b2a1908f7e6d5c4b3a29180".to_string(),
             cold_pubkey: "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b".to_string(),
-            cold_privkey: "2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c".to_string(),
             treasurer_pubkey: "3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d".to_string(),
             treasurer_privkey: "4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e".to_string(),
             operations_pubkey: "5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f".to_string(),
-            operations_privkey: "6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a".to_string(),
         };
 
         let vault = HybridAdvancedVault::new(config);
