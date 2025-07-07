@@ -918,6 +918,17 @@ impl App {
                 }
             };
             
+            // Check if delegation amount is reasonable compared to vault amount
+            let vault_info = vault.get_vault_info();
+            let max_safe_amount = vault_info.amount.saturating_sub(5000); // Reserve 5000 sats for fees
+            if amount > max_safe_amount {
+                self.show_popup(format!(
+                    "❌ Delegation amount ({} sats) exceeds safe limit.\nVault has {} sats, max safe delegation: {} sats\n(Reserves 5000 sats for fees)",
+                    amount, vault_info.amount, max_safe_amount
+                ));
+                return Ok(());
+            }
+            
             let expiry_blocks = match self.delegation_expiry_input.parse::<u32>() {
                 Ok(blocks) if blocks > 0 => blocks,
                 Ok(_) => {
@@ -1156,8 +1167,8 @@ impl App {
 
     /// Set default values for delegation creation form
     pub async fn set_delegation_defaults(&mut self) -> Result<()> {
-        // Default amount: 10,000 sats
-        self.delegation_amount_input = "10000".to_string();
+        // Default amount: 1,000 sats (reduced to avoid exceeding vault balance)
+        self.delegation_amount_input = "1000".to_string();
         
         // Default expiry: current block + 100
         self.delegation_expiry_input = "100".to_string();
@@ -2338,7 +2349,7 @@ fn render_delegation_creation_popup(f: &mut Frame, app: &App) {
     let form_text = format!(
         "🔐 CREATE DELEGATION\n\n\
         Amount (sats): {}{}\n\
-        💰 Default: 10,000 sats\n\n\
+        💰 Default: 1,000 sats (safe for 20k vault)\n\n\
         Recipient Address: {}{}\n\
         🏠 Auto-generated wallet address\n\n\
         Expiry (blocks from now): {}{}\n\

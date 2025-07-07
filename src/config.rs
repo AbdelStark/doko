@@ -101,7 +101,7 @@ pub mod vault {
     /// # CTV Template Impact
     /// This amount is hardcoded into the CTV transaction templates. Different
     /// amounts require different vault configurations and addresses.
-    pub const DEFAULT_DEMO_AMOUNT: u64 = 5_000;
+    pub const DEFAULT_DEMO_AMOUNT: u64 = 20_000;
 
     /// Fast CSV delay for demonstrations (3 blocks ≈ 90 seconds on Mutinynet).
     /// 
