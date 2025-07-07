@@ -595,9 +595,8 @@ async fn execute_hybrid_csfs_delegation(
     println!("👔 Treasurer delegates spending authority to Operations");
     println!();
 
-    // Create delegation message - use fixed address to test determinism
-    let destination = Address::from_str("tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx")?
-        .require_network(Network::Signet)?;
+    // Create delegation message - use dynamic address to avoid UTXO conflicts
+    let destination = rpc.get_new_address()?;
     
     // Use the vault config amount for now - this worked in flakiness.md
     let vault_amount = vault.get_vault_info().amount;
