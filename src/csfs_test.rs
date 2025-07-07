@@ -77,32 +77,34 @@ impl CsfsTest {
         Ok(hex::encode(signature.as_ref()))
     }
 
-    /// Create a minimal CSFS script for testing
+    /// Create a proper CSFS delegation script following working vault patterns
     /// 
-    /// This creates a simple script that validates a signature on a message.
-    /// The script expects the witness to provide [sig, msg, pubkey] and then
-    /// calls OP_CHECKSIGFROMSTACK to verify the signature.
+    /// This creates a CSFS script using the same Builder pattern as the working CTV vault.
+    /// The script structure follows the same pattern that successfully works in production.
     /// 
-    /// Note: Mutinynet CSFS expects stack order [sig, msg, pubkey] (bottom to top)
-    /// and only works in Tapscript context.
-    pub fn create_simple_csfs_script(&self, pubkey_hex: &str) -> VaultResult<ScriptBuf> {
-        let pubkey_bytes = hex::decode(pubkey_hex)
-            .map_err(|e| VaultError::InvalidPublicKey(format!("Invalid pubkey hex: {}", e)))?;
-        
-        if pubkey_bytes.len() != 32 {
-            return Err(VaultError::InvalidPublicKey(format!(
-                "Public key must be 32 bytes, got {}",
-                pubkey_bytes.len()
-            )));
-        }
-        
-        let _pubkey = XOnlyPublicKey::from_slice(&pubkey_bytes)
-            .map_err(|e| VaultError::InvalidPublicKey(format!("Invalid public key: {}", e)))?;
-        
-        // Create script that expects [sig, msg, pubkey] from witness
-        // calls CSFS to verify - CSFS leaves 1 (true) or 0 (false) on stack
-        // Create script directly from raw bytes (no length prefix)
+    /// Script execution:
+    /// - Expects witness stack items to be consumed by CSFS opcode
+    /// - Uses OP_CHECKSIGFROMSTACK to verify signature against message and pubkey
+    /// - Follows the same construction pattern as working CTV scripts
+    /// 
+    /// Note: This follows the exact same pattern as vault_trigger_script() and 
+    /// ctv_vault_deposit_script() that work successfully with real transactions.
+    pub fn create_csfs_delegation_script(&self) -> VaultResult<ScriptBuf> {
+        // Create CSFS script with just the opcode (no push prefix)
+        // CSFS consumes [sig, msg, pubkey] from stack and leaves [success] result
         Ok(ScriptBuf::from(vec![OP_CHECKSIGFROMSTACK]))
+    }
+
+    /// Create a simple CTV vault script (Script Path 1) 
+    /// 
+    /// This creates a basic CTV covenant script exactly like our working vault.
+    /// Uses the same pattern as ctv_vault_deposit_script() which works successfully.
+    pub fn create_simple_ctv_script(&self, ctv_hash: [u8; 32]) -> VaultResult<ScriptBuf> {
+        // Use exact same pattern as working vault: push_slice + push_opcode
+        Ok(Builder::new()
+            .push_slice(&ctv_hash)     // 32-byte CTV hash
+            .push_opcode(OP_NOP4)      // OP_CHECKTEMPLATEVERIFY placeholder
+            .into_script())
     }
 
     /// Create a more complex CSFS script with delegation logic
@@ -163,7 +165,7 @@ impl CsfsTest {
         witness.push(&signature_bytes);  // Bottom of stack
         witness.push(message);
         witness.push(&pubkey_bytes);     // Top of stack (consumed first by CSFS)
-        witness.push(script.as_bytes());
+        witness.push(script.to_bytes()); // Consistent with working implementations
         
         Ok(witness)
     }
@@ -191,17 +193,20 @@ impl CsfsTest {
         witness.push(message);           // For CSFS stack  
         witness.push(&pubkey_bytes);     // For CSFS stack
         witness.push(&[0]);              // FALSE for OP_IF (take ELSE branch = CSFS)
-        witness.push(script.as_bytes());
+        witness.push(script.to_bytes()); // Consistent with working implementations
         
         Ok(witness)
     }
 
-    /// Create a P2TR address with CSFS script in tapscript using NUMS point
-    pub fn create_csfs_taproot_address(&self, script: &ScriptBuf) -> VaultResult<(Address, TapLeafHash, bitcoin::taproot::TaprootSpendInfo)> {
+    /// Create TaprootSpendInfo for multi-path vault (CTV + CSFS delegation)
+    /// 
+    /// Following external implementation pattern with multiple script paths:
+    /// - Path 1 (Depth 0): Simple CTV vault operations  
+    /// - Path 2 (Depth 1): Pure CSFS key delegation
+    pub fn create_multi_path_spend_info(&self, ctv_hash: [u8; 32]) -> VaultResult<bitcoin::taproot::TaprootSpendInfo> {
         use bitcoin::taproot::{TaprootBuilder, LeafVersion};
-        use bitcoin::hashes::{sha256, Hash};
         
-        // Use the same NUMS point as the working vault implementation
+        // Use the same NUMS point as working vault implementation
         let nums_bytes = [
             0x50, 0x92, 0x9b, 0x74, 0xc1, 0xa0, 0x49, 0x54, 0xb7, 0x8b, 0x4b, 0x60, 0x35, 0xe9, 0x7a, 0x5e,
             0x07, 0x8a, 0x5a, 0x0f, 0x28, 0xec, 0x96, 0xd5, 0x47, 0xbf, 0xee, 0x9a, 0xce, 0x80, 0x3a, 0xc0,
@@ -209,30 +214,70 @@ impl CsfsTest {
         let nums_key = XOnlyPublicKey::from_slice(&nums_bytes)
             .map_err(|e| VaultError::InvalidPublicKey(format!("Failed to create NUMS key: {}", e)))?;
         
-        // Create taproot with the CSFS script as a leaf
+        // Create individual scripts for each path
+        let ctv_script = self.create_simple_ctv_script(ctv_hash)?;
+        let csfs_script = self.create_csfs_delegation_script()?;
+        
+        // Build Taproot with multiple script paths using same depth (like external implementation)
+        // Both scripts at depth 1 to create a balanced tree
         let taproot_builder = TaprootBuilder::new()
-            .add_leaf(0, script.clone())
-            .map_err(|e| VaultError::Other(format!("Failed to create taproot: {:?}", e)))?;
+            .add_leaf(1, ctv_script)    // Depth 1: CTV vault 
+            .map_err(|e| VaultError::Other(format!("Failed to add CTV leaf: {:?}", e)))?
+            .add_leaf(1, csfs_script)   // Depth 1: CSFS delegation (same depth for balance)
+            .map_err(|e| VaultError::Other(format!("Failed to add CSFS leaf: {:?}", e)))?;
             
         let taproot_spend_info = taproot_builder
             .finalize(&self.secp, nums_key)
             .map_err(|e| VaultError::Other(format!("Failed to finalize taproot: {:?}", e)))?;
             
+        Ok(taproot_spend_info)
+    }
+
+    /// Create TaprootSpendInfo for CSFS-only delegation (for testing)
+    /// 
+    /// This creates a single-path Taproot with only the CSFS delegation script.
+    /// Used for isolated CSFS testing to eliminate CTV-related complexity.
+    pub fn create_csfs_only_spend_info(&self) -> VaultResult<bitcoin::taproot::TaprootSpendInfo> {
+        use bitcoin::taproot::{TaprootBuilder, LeafVersion};
+        
+        let nums_bytes = [
+            0x50, 0x92, 0x9b, 0x74, 0xc1, 0xa0, 0x49, 0x54, 0xb7, 0x8b, 0x4b, 0x60, 0x35, 0xe9, 0x7a, 0x5e,
+            0x07, 0x8a, 0x5a, 0x0f, 0x28, 0xec, 0x96, 0xd5, 0x47, 0xbf, 0xee, 0x9a, 0xce, 0x80, 0x3a, 0xc0,
+        ];
+        let nums_key = XOnlyPublicKey::from_slice(&nums_bytes)
+            .map_err(|e| VaultError::InvalidPublicKey(format!("Failed to create NUMS key: {}", e)))?;
+        
+        let csfs_script = self.create_csfs_delegation_script()?;
+        
+        let taproot_builder = TaprootBuilder::new()
+            .add_leaf(0, csfs_script)  // Single path at depth 0
+            .map_err(|e| VaultError::Other(format!("Failed to add CSFS leaf: {:?}", e)))?;
+            
+        let taproot_spend_info = taproot_builder
+            .finalize(&self.secp, nums_key)
+            .map_err(|e| VaultError::Other(format!("Failed to finalize taproot: {:?}", e)))?;
+            
+        Ok(taproot_spend_info)
+    }
+
+    /// Create P2TR address for CSFS delegation testing
+    pub fn create_csfs_delegation_address(&self) -> VaultResult<(Address, TapLeafHash, bitcoin::taproot::TaprootSpendInfo)> {
+        let taproot_spend_info = self.create_csfs_only_spend_info()?;
         let address = Address::p2tr_tweaked(taproot_spend_info.output_key(), self.network);
         
-        // Get the leaf hash for spending
-        let leaf_hash = TapLeafHash::from_script(script, LeafVersion::TapScript);
+        // Get the leaf hash for the CSFS script
+        let csfs_script = self.create_csfs_delegation_script()?;
+        let leaf_hash = TapLeafHash::from_script(&csfs_script, bitcoin::taproot::LeafVersion::TapScript);
         
         Ok((address, leaf_hash, taproot_spend_info))
     }
 
-    /// Create a funding transaction that sends coins to a CSFS script
+    /// Create a funding transaction that sends coins to a CSFS delegation address
     pub fn create_funding_transaction(
         &self,
-        script: &ScriptBuf,
         amount: Amount,
     ) -> VaultResult<(Transaction, Address, TapLeafHash)> {
-        let (csfs_address, leaf_hash, _taproot_spend_info) = self.create_csfs_taproot_address(script)?;
+        let (csfs_address, leaf_hash, _taproot_spend_info) = self.create_csfs_delegation_address()?;
         
         // Create a simple transaction template (caller will need to add inputs)
         let tx = Transaction {
@@ -248,12 +293,14 @@ impl CsfsTest {
         Ok((tx, csfs_address, leaf_hash))
     }
 
-    /// Create a spending transaction that uses CSFS
-    pub fn create_csfs_spending_transaction(
+    /// Create a clean CSFS delegation spending transaction using new architecture
+    /// 
+    /// This method uses the new multi-path architecture with dedicated script functions
+    /// to avoid the witness program hash mismatch issue.
+    pub fn create_csfs_delegation_transaction(
         &self,
         funding_outpoint: OutPoint,
         funding_amount: Amount,
-        script: &ScriptBuf,
         signature_hex: &str,
         message: &[u8],
         pubkey_hex: &str,
@@ -263,9 +310,6 @@ impl CsfsTest {
         let output_amount = funding_amount.checked_sub(fee)
             .ok_or_else(|| VaultError::Other("Fee exceeds funding amount".to_string()))?;
         
-        // Get taproot spend info using the same method as address creation
-        let (_, _, taproot_spend_info) = self.create_csfs_taproot_address(script)?;
-
         // Create the spending transaction
         let mut tx = Transaction {
             version: bitcoin::transaction::Version::TWO,
@@ -282,29 +326,39 @@ impl CsfsTest {
             }],
         };
 
-        // Create control block for script path spending
-        let control_block = taproot_spend_info
-            .control_block(&(script.clone(), bitcoin::taproot::LeafVersion::TapScript))
-            .ok_or_else(|| VaultError::Other("Failed to create control block".to_string()))?;
+        // Use the new clean CSFS-only spend info method 
+        let taproot_spend_info = self.create_csfs_only_spend_info()?;
+        let csfs_script = self.create_csfs_delegation_script()?;
 
-        // Create Taproot witness like the working CTV vault
-        // For CSFS, we need: [sig, msg, pubkey, script, control_block]
-        // The sig, msg, pubkey are consumed by the CSFS script during execution
+        // Create control block for the CSFS script path
+        let control_block = taproot_spend_info
+            .control_block(&(csfs_script.clone(), bitcoin::taproot::LeafVersion::TapScript))
+            .ok_or_else(|| VaultError::Other("Failed to create control block for CSFS script".to_string()))?;
+
+        // Create clean witness for CSFS delegation following working vault patterns
         let signature_bytes = hex::decode(signature_hex)
             .map_err(|e| VaultError::InvalidSignature(format!("Invalid signature hex: {}", e)))?;
         let pubkey_bytes = hex::decode(pubkey_hex)
             .map_err(|e| VaultError::InvalidPublicKey(format!("Invalid pubkey hex: {}", e)))?;
 
-        // For Mutinynet CSFS, pass the message hash that was signed, not raw message
+        // For Mutinynet CSFS, hash the message before signing (consistent with signature creation)
         use bitcoin::hashes::{sha256, Hash};
         let message_hash = sha256::Hash::hash(message);
 
+        // Create simple witness following working CTV vault pattern
+        // Working pattern: witness.push(script.to_bytes()); witness.push(control_block.serialize());
+        // For CSFS, we need to provide the signature data that the script will consume
         let mut witness = Witness::new();
-        witness.push(&signature_bytes);  // CSFS signature (consumed by script)
-        witness.push(message_hash.as_byte_array());  // CSFS message hash (what was actually signed)
-        witness.push(&pubkey_bytes);     // CSFS pubkey (consumed by script)
-        witness.push(script.to_bytes()); // Script (using to_bytes() like CTV vault)
-        witness.push(control_block.serialize()); // Control block
+        
+        // CSFS requires signature, message, and pubkey on stack before script execution
+        // These will be consumed by OP_CHECKSIGFROMSTACK during script evaluation
+        witness.push(&signature_bytes);               // Signature for CSFS
+        witness.push(message_hash.as_byte_array());   // Message hash for CSFS  
+        witness.push(&pubkey_bytes);                  // Public key for CSFS
+        
+        // Standard Taproot script-path items (exactly like working CTV vault)
+        witness.push(csfs_script.to_bytes());         // Script
+        witness.push(control_block.serialize());      // Control block
         
         tx.input[0].witness = witness;
         

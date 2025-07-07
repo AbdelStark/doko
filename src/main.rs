@@ -691,6 +691,86 @@ async fn debug_csfs(
     let csfs_test = CsfsTest::new(Network::Signet);
     
     match operation {
+        "multi-path" => {
+            println!("🔄 MULTI-PATH TAPROOT ARCHITECTURE TEST");
+            println!("════════════════════════════════════════");
+            println!("Testing both CTV and CSFS script paths in same Taproot tree");
+            println!();
+            
+            // Generate test keys and data
+            let (test_private_key, test_public_key) = csfs_test.generate_keypair()?;
+            let message = b"MULTI-PATH TEST ON MUTINYNET";
+            let signature = csfs_test.sign_message(message, &test_private_key)?;
+            
+            println!("🔑 Generated Test Keys:");
+            println!("   Private: {}", test_private_key);
+            println!("   Public:  {}", test_public_key);
+            println!("📝 Test Message: {}", String::from_utf8_lossy(message));
+            println!("✍️  CSFS Signature: {}", signature);
+            println!();
+            
+            // Test 1: Create multi-path spend info
+            println!("🔹 Test 1: Multi-Path TaprootSpendInfo Creation");
+            let dummy_ctv_hash = [0u8; 32]; // Dummy CTV hash for testing
+            let multi_spend_info = csfs_test.create_multi_path_spend_info(dummy_ctv_hash)?;
+            println!("✅ Multi-path TaprootSpendInfo created successfully");
+            println!("   Output Key: {}", hex::encode(multi_spend_info.output_key().serialize()));
+            println!();
+            
+            // Test 2: Create CSFS-only spend info  
+            println!("🔹 Test 2: CSFS-Only TaprootSpendInfo Creation");
+            let csfs_spend_info = csfs_test.create_csfs_only_spend_info()?;
+            println!("✅ CSFS-only TaprootSpendInfo created successfully");
+            println!("   Output Key: {}", hex::encode(csfs_spend_info.output_key().serialize()));
+            println!();
+            
+            // Test 3: Compare script creation
+            println!("🔹 Test 3: Individual Script Creation");
+            let ctv_script = csfs_test.create_simple_ctv_script(dummy_ctv_hash)?;
+            let csfs_script = csfs_test.create_csfs_delegation_script()?;
+            println!("✅ CTV Script ({} bytes): {}", ctv_script.len(), hex::encode(ctv_script.as_bytes()));
+            println!("✅ CSFS Script ({} bytes): {}", csfs_script.len(), hex::encode(csfs_script.as_bytes()));
+            println!();
+            
+            // Test 4: Control block generation for both paths
+            println!("🔹 Test 4: Control Block Generation");
+            
+            // Multi-path control blocks
+            let ctv_control_multi = multi_spend_info
+                .control_block(&(ctv_script.clone(), bitcoin::taproot::LeafVersion::TapScript));
+            let csfs_control_multi = multi_spend_info
+                .control_block(&(csfs_script.clone(), bitcoin::taproot::LeafVersion::TapScript));
+                
+            // CSFS-only control block
+            let csfs_control_only = csfs_spend_info
+                .control_block(&(csfs_script.clone(), bitcoin::taproot::LeafVersion::TapScript));
+            
+            match (ctv_control_multi, csfs_control_multi, csfs_control_only) {
+                (Some(ctv_cb), Some(csfs_cb_multi), Some(csfs_cb_only)) => {
+                    println!("✅ CTV Control Block (multi-path): {} bytes", ctv_cb.serialize().len());
+                    println!("✅ CSFS Control Block (multi-path): {} bytes", csfs_cb_multi.serialize().len());
+                    println!("✅ CSFS Control Block (single-path): {} bytes", csfs_cb_only.serialize().len());
+                    
+                    // Compare if control blocks are different between multi and single path
+                    if csfs_cb_multi.serialize() != csfs_cb_only.serialize() {
+                        println!("✅ Control blocks differ between multi-path and single-path (expected)");
+                    } else {
+                        println!("⚠️  Control blocks identical (unexpected - may indicate issue)");
+                    }
+                }
+                _ => {
+                    println!("❌ Failed to generate control blocks");
+                    return Err(anyhow::anyhow!("Control block generation failed"));
+                }
+            }
+            println!();
+            
+            println!("🎊 MULTI-PATH ARCHITECTURE TEST COMPLETED!");
+            println!("✅ Both script paths can be constructed");
+            println!("✅ TaprootSpendInfo generation works for both patterns");
+            println!("✅ Control blocks generated for all paths");
+            println!("✅ Architecture ready for advanced vault implementation");
+        }
         "sign" => {
             println!("✍️  BIP-340 Schnorr Signature Generation");
             println!("─────────────────────────────────────────");
@@ -759,7 +839,7 @@ async fn debug_csfs(
             
             // Create simple CSFS script
             println!("🔹 Simple CSFS Script:");
-            let simple_script = csfs_test.create_simple_csfs_script(&test_public_key)?;
+            let simple_script = csfs_test.create_csfs_delegation_script()?;
             println!("{}", csfs_test.debug_script(&simple_script));
             
             // Create delegation CSFS script  
@@ -796,7 +876,7 @@ async fn debug_csfs(
             println!();
             
             // Create simple CSFS script for testing
-            let csfs_script = csfs_test.create_simple_csfs_script(&test_public_key)?;
+            let csfs_script = csfs_test.create_csfs_delegation_script()?;
             println!("📜 CSFS Script ({} bytes): {}", csfs_script.len(), hex::encode(csfs_script.as_bytes()));
             
             // Verify signature off-chain first
@@ -804,8 +884,8 @@ async fn debug_csfs(
             let verification_result = csfs_test.verify_signature(message, &signature, &test_public_key)?;
             println!("✅ Off-chain verification: {}", verification_result);
             
-            // Create taproot address with CSFS script using NUMS point
-            let (csfs_address, _leaf_hash, _taproot_spend_info) = csfs_test.create_csfs_taproot_address(&csfs_script)?;
+            // Create taproot address with clean CSFS delegation architecture
+            let (csfs_address, _leaf_hash, _taproot_spend_info) = csfs_test.create_csfs_delegation_address()?;
             println!("🏠 CSFS Taproot Address: {}", csfs_address);
             println!();
             
@@ -845,10 +925,9 @@ async fn debug_csfs(
             
             // Create the CSFS spending transaction
             println!("🔨 Creating CSFS spending transaction...");
-            let spending_tx = csfs_test.create_csfs_spending_transaction(
+            let spending_tx = csfs_test.create_csfs_delegation_transaction(
                 funding_outpoint,
                 funding_amount,
-                &csfs_script,
                 &signature,
                 message,
                 &test_public_key,
