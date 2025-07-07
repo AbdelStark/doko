@@ -181,7 +181,7 @@ impl HybridAdvancedVault {
     /// This creates the proven CSFS script for key delegation.
     /// It allows treasurer to delegate spending authority to operations team.
     fn create_csfs_delegation_script(&self) -> VaultResult<ScriptBuf> {
-        // Use the exact same script construction as working CSFS implementation
+        // CSFS script using the actual opcode value for Mutinynet
         Ok(ScriptBuf::from(vec![OP_CHECKSIGFROMSTACK]))
     }
 
@@ -515,6 +515,7 @@ impl HybridAdvancedVault {
         let signature = self.sign_message(test_message, &self.config.treasurer_privkey)?;
         let signature_bytes = hex::decode(&signature)?;
         let pubkey_bytes = hex::decode(&self.config.treasurer_pubkey)?;
+
         let message_hash = sha256::Hash::hash(test_message);
 
         let mut witness = Witness::new();
@@ -585,12 +586,12 @@ impl HybridAdvancedVault {
             &self.config.treasurer_privkey
         ).map_err(|e| anyhow!("Failed to create delegation signature: {:?}", e))?;
 
-        // Create CSFS witness using EXACT same pattern as working csfs_test implementation
+        // Create CSFS witness using EXACT same pattern as working implementation
         let signature_bytes = hex::decode(&delegation_signature)?;
         let pubkey_bytes = hex::decode(&self.config.treasurer_pubkey)?;
         let message_hash = sha256::Hash::hash(delegation_message.as_bytes());
 
-        // Use the exact witness construction from working csfs_test.rs
+        // Use the exact witness construction from working csfs_test.rs  
         let mut witness = Witness::new();
         witness.push(&signature_bytes);               // Signature for CSFS
         witness.push(message_hash.as_byte_array());   // Message hash for CSFS  

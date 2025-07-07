@@ -22,8 +22,8 @@
 //! doko dashboard --vault-type hybrid
 //! ```
 
-use anyhow::Result;
-use bitcoin::{OutPoint, Network, Amount};
+use anyhow::{anyhow, Result};
+use bitcoin::{OutPoint, Network, Amount, Address};
 use clap::{Parser, Subcommand};
 use std::{str::FromStr, time::Duration};
 use tokio::time::sleep;
@@ -595,13 +595,16 @@ async fn execute_hybrid_csfs_delegation(
     println!("👔 Treasurer delegates spending authority to Operations");
     println!();
 
-    // Create delegation message
-    let destination = rpc.get_new_address()?;
+    // Create delegation message - use fixed address to test determinism
+    let destination = Address::from_str("tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx")?
+        .require_network(Network::Signet)?;
+    
+    // Use the vault config amount for now - this worked in flakiness.md
     let vault_amount = vault.get_vault_info().amount;
     let delegation_amount = Amount::from_sat(if vault_amount > 3000 {
         vault_amount - 3000  // Leave 3000 sats for fees
     } else {
-        vault_amount / 2     // Use half if amount is small
+        vault_amount / 2     // Use half if amount is small  
     });
     let expiry_height = (rpc.get_block_count()? + 100) as u32;
     

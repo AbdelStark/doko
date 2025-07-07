@@ -1,6 +1,6 @@
 use crate::config::{env as config_env, network};
 use crate::error::{VaultError, VaultResult};
-use bitcoin::{Transaction, Txid, Address};
+use bitcoin::{Transaction, Txid, Address, Amount, ScriptBuf};
 use bitcoincore_rpc::{Auth, Client, RpcApi};
 use serde_json::Value;
 use std::{env, str::FromStr};
@@ -136,5 +136,27 @@ impl MutinynetClient {
             .map_err(|e| VaultError::Rpc { source: e })?;
         Txid::from_str(&result)
             .map_err(|e| VaultError::operation("parse_txid", e.to_string()))
+    }
+
+    /// Get UTXO information for a specific outpoint
+    pub fn get_utxo_info(&self, txid: &Txid, vout: u32) -> VaultResult<Option<(Amount, ScriptBuf)>> {
+        let tx_info = self.get_raw_transaction_verbose(txid)?;
+        
+        if let Some(vout_array) = tx_info.get("vout").and_then(|v| v.as_array()) {
+            if let Some(output) = vout_array.get(vout as usize) {
+                if let (Some(value), Some(script_pub_key)) = (
+                    output.get("value").and_then(|v| v.as_f64()),
+                    output.get("scriptPubKey").and_then(|s| s.get("hex")).and_then(|h| h.as_str())
+                ) {
+                    let amount = Amount::from_btc(value)
+                        .map_err(|e| VaultError::operation("get_utxo_info", format!("Invalid amount: {}", e)))?;
+                    let script = ScriptBuf::from_hex(script_pub_key)
+                        .map_err(|e| VaultError::operation("get_utxo_info", format!("Invalid script: {}", e)))?;
+                    return Ok(Some((amount, script)));
+                }
+            }
+        }
+        
+        Ok(None)
     }
 }
