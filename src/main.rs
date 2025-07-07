@@ -119,9 +119,10 @@ async fn main() -> Result<()> {
                 }
             }
             VaultType::Hybrid => {
-                println!("🚧 Hybrid vault TUI dashboard coming soon!");
-                println!("📋 Use: doko auto-demo --vault-type hybrid");
-                println!("   Available scenarios: hot-withdrawal, cold-recovery, csfs-delegation");
+                if let Some(transcript_content) = tui::hybrid::run_tui().await? {
+                    println!("\n{}", transcript_content);
+                    println!("📁 Transcript saved to ./transcripts/ directory");
+                }
             }
         },
     }

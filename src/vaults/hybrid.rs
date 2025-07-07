@@ -55,7 +55,7 @@ use anyhow::{anyhow, Result};
 use std::str::FromStr;
 
 /// Configuration for the hybrid advanced vault
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct HybridVaultConfig {
     /// Network for address generation
     pub network: Network,
