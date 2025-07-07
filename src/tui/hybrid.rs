@@ -243,7 +243,10 @@ impl App {
         let block_height = rpc.get_block_count()?;
 
         // Try to load existing vault from auto_vault.json
-        let vault = Self::load_vault_from_file().ok();
+        let (vault, vault_config) = match Self::load_vault_from_file() {
+            Ok((v, c)) => (Some(v), Some(c)),
+            Err(_) => (None, None),
+        };
         let vault_status = if let Some(ref v) = vault {
             let vault_info = v.get_vault_info();
             VaultStatus::Created {
@@ -292,7 +295,7 @@ impl App {
             show_message_signer: false,
             message_to_sign: String::new(),
             signed_message: None,
-            vault_config: None,
+            vault_config,
             delegation_amount_input: String::new(),
             delegation_recipient_input: String::new(),
             delegation_expiry_input: String::new(),
@@ -587,11 +590,11 @@ impl App {
     }
 
     /// Load vault from auto_vault.json file
-    fn load_vault_from_file() -> Result<HybridAdvancedVault> {
+    fn load_vault_from_file() -> Result<(HybridAdvancedVault, HybridVaultConfig)> {
         let content = fs::read_to_string(files::AUTO_VAULT_CONFIG)?;
         let vault_config: HybridVaultConfig = serde_json::from_str(&content)?;
-        let vault = HybridAdvancedVault::new(vault_config);
-        Ok(vault)
+        let vault = HybridAdvancedVault::new(vault_config.clone());
+        Ok((vault, vault_config))
     }
 
     /// Save vault to auto_vault.json file
@@ -887,6 +890,17 @@ impl App {
     pub async fn create_delegation(&mut self) -> Result<()> {
         if self.current_role != Role::Treasurer && self.current_role != Role::CEO {
             self.show_popup("❌ Access Denied: Only Treasurer or CEO can create delegations".to_string());
+            return Ok(());
+        }
+        
+        // Debug: Check if vault and vault_config are available
+        if self.vault.is_none() {
+            self.show_popup("❌ Error: No vault found. Please create a vault first with 'n' key.".to_string());
+            return Ok(());
+        }
+        
+        if self.vault_config.is_none() {
+            self.show_popup("❌ Error: Vault configuration not found. Please create a vault first with 'n' key.".to_string());
             return Ok(());
         }
 
@@ -1236,9 +1250,17 @@ pub async fn run_tui() -> Result<Option<String>> {
                                 };
                             }
                             KeyCode::Enter => {
-                                let create_future = app.create_delegation();
-                                if let Err(e) = create_future.await {
-                                    app.show_popup(format!("Failed to create delegation: {}", e));
+                                // Show immediate feedback
+                                app.show_status_message("🔐 Creating delegation...".to_string());
+                                match app.create_delegation().await {
+                                    Ok(_) => {
+                                        // Success is handled inside create_delegation method
+                                        app.show_status_message("✅ Delegation created successfully!".to_string());
+                                    }
+                                    Err(e) => {
+                                        app.show_popup(format!("❌ Failed to create delegation: {}", e));
+                                        app.show_status_message("❌ Delegation creation failed - check popup for details".to_string());
+                                    }
                                 }
                             }
                             KeyCode::Char(c) => {
