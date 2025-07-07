@@ -891,16 +891,35 @@ impl App {
         }
 
         if let Some(ref vault) = self.vault {
-            // Parse inputs
-            let amount = self.delegation_amount_input.parse::<u64>()
-                .map_err(|_| anyhow::anyhow!("Invalid amount"))?;
+            // Parse inputs with better error handling
+            let amount = match self.delegation_amount_input.parse::<u64>() {
+                Ok(amt) if amt > 0 => amt,
+                Ok(_) => {
+                    self.show_popup("❌ Amount must be greater than 0".to_string());
+                    return Ok(());
+                }
+                Err(_) => {
+                    self.show_popup("❌ Invalid amount format".to_string());
+                    return Ok(());
+                }
+            };
             
-            let expiry_blocks = self.delegation_expiry_input.parse::<u32>()
-                .map_err(|_| anyhow::anyhow!("Invalid expiry blocks"))?;
+            let expiry_blocks = match self.delegation_expiry_input.parse::<u32>() {
+                Ok(blocks) if blocks > 0 => blocks,
+                Ok(_) => {
+                    self.show_popup("❌ Expiry blocks must be greater than 0".to_string());
+                    return Ok(());
+                }
+                Err(_) => {
+                    self.show_popup("❌ Invalid expiry blocks format".to_string());
+                    return Ok(());
+                }
+            };
 
-            let recipient = self.delegation_recipient_input.clone();
+            let recipient = self.delegation_recipient_input.trim().to_string();
             if recipient.is_empty() {
-                return Err(anyhow::anyhow!("Recipient address cannot be empty"));
+                self.show_popup("❌ Recipient address cannot be empty".to_string());
+                return Ok(());
             }
 
             // Calculate expiry height
@@ -953,7 +972,13 @@ impl App {
                     "✅ Delegation created successfully!\nID: {}\nAmount: {} sats\nExpires at block: {}",
                     delegation_info.id, amount, expiry_height
                 ));
+            } else {
+                self.show_popup("❌ Error: Vault configuration not found. Please create a vault first.".to_string());
+                return Ok(());
             }
+        } else {
+            self.show_popup("❌ Error: No vault found. Please create a vault first.".to_string());
+            return Ok(());
         }
         Ok(())
     }
@@ -1112,6 +1137,28 @@ impl App {
                 delegation.status = DelegationStatus::Expired;
             }
         }
+        Ok(())
+    }
+
+    /// Set default values for delegation creation form
+    pub async fn set_delegation_defaults(&mut self) -> Result<()> {
+        // Default amount: 10,000 sats
+        self.delegation_amount_input = "10000".to_string();
+        
+        // Default expiry: current block + 100
+        self.delegation_expiry_input = "100".to_string();
+        
+        // Generate a random recipient address (create a new address from the wallet)
+        match self.rpc.get_new_address() {
+            Ok(address) => {
+                self.delegation_recipient_input = address.to_string();
+            }
+            Err(_) => {
+                // Fallback to a placeholder address if wallet call fails
+                self.delegation_recipient_input = "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx".to_string();
+            }
+        }
+        
         Ok(())
     }
 
@@ -1391,10 +1438,12 @@ pub async fn run_tui() -> Result<Option<String>> {
                             // Show delegation creation popup
                             if app.current_role == Role::Treasurer || app.current_role == Role::CEO {
                                 app.show_delegation_popup = true;
-                                app.delegation_amount_input.clear();
-                                app.delegation_recipient_input.clear();
-                                app.delegation_expiry_input.clear();
-                                app.delegation_input_field = DelegationInputField::Amount;
+                                // Set default values
+                                if let Err(e) = app.set_delegation_defaults().await {
+                                    app.show_popup(format!("❌ Failed to set defaults: {}", e));
+                                } else {
+                                    app.delegation_input_field = DelegationInputField::Amount;
+                                }
                             } else {
                                 app.show_popup("❌ Access Denied: Only Treasurer or CEO can create delegations".to_string());
                             }
@@ -2246,21 +2295,30 @@ fn render_delegation_creation_popup(f: &mut Frame, app: &App) {
     f.render_widget(Clear, popup_area);
 
     let current_height = app.block_height;
+    let expiry_height = current_height + app.delegation_expiry_input.parse::<u64>().unwrap_or(100);
     let form_text = format!(
         "🔐 CREATE DELEGATION\n\n\
-        Amount (sats): {}{}\n\n\
-        Recipient: {}{}\n\n\
-        Expiry (blocks from now): {}{}\n\n\
+        Amount (sats): {}{}\n\
+        💰 Default: 10,000 sats\n\n\
+        Recipient Address: {}{}\n\
+        🏠 Auto-generated wallet address\n\n\
+        Expiry (blocks from now): {}{}\n\
+        🕒 Will expire at block: {}\n\n\
         Current block height: {}\n\n\
-        📝 Use [Tab] to switch fields\n\
-        📤 Press [Enter] to create\n\
-        🚫 Press [Esc] to cancel",
+        ⚙️ Use [Tab] to switch fields | Type to edit\n\
+        ✅ Press [Enter] to create delegation\n\
+        ❌ Press [Esc] to cancel",
         app.delegation_amount_input,
         if app.delegation_input_field == DelegationInputField::Amount { " ◄" } else { "" },
-        app.delegation_recipient_input,
+        if app.delegation_recipient_input.len() > 20 {
+            format!("{}...{}", &app.delegation_recipient_input[..10], &app.delegation_recipient_input[app.delegation_recipient_input.len()-10..])
+        } else {
+            app.delegation_recipient_input.clone()
+        },
         if app.delegation_input_field == DelegationInputField::Recipient { " ◄" } else { "" },
         app.delegation_expiry_input,
         if app.delegation_input_field == DelegationInputField::Expiry { " ◄" } else { "" },
+        expiry_height,
         current_height,
     );
 
