@@ -416,6 +416,84 @@ impl HybridAdvancedVault {
         tx.input[0].witness = witness;
         Ok(tx)
     }
+
+    /// Create a cold recovery transaction template for CTV hash computation
+    fn create_cold_tx_template(&self) -> Result<Transaction> {
+        // Create cold recovery output (same pattern as simple vault)
+        let cold_address = Address::p2tr_tweaked(
+            bitcoin::key::TweakedPublicKey::dangerous_assume_tweaked(
+                XOnlyPublicKey::from_str(&self.config.cold_pubkey)?
+            ),
+            self.config.network
+        );
+        
+        let output = TxOut {
+            value: Amount::from_sat(self.config.amount - 2000), // Reserve 2000 sats for fees  
+            script_pubkey: cold_address.script_pubkey(),
+        };
+        
+        let input = TxIn {
+            previous_output: OutPoint::null(), // Template placeholder
+            script_sig: ScriptBuf::new(),
+            sequence: Sequence::ZERO, // No delay for emergency
+            witness: Witness::new(),
+        };
+        
+        Ok(Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![input],
+            output: vec![output],
+        })
+    }
+
+    /// Create the emergency cold clawback transaction (step 2: trigger → cold)
+    /// 
+    /// This creates a transaction that immediately sweeps funds from the trigger
+    /// output to cold storage, using the ELSE branch of the trigger script.
+    pub fn create_cold_tx(&self, trigger_utxo: OutPoint) -> Result<Transaction> {
+        // Create cold recovery transaction template
+        let mut tx = self.create_cold_tx_template()?;
+        tx.input[0].previous_output = trigger_utxo;
+        
+        // Get trigger script for witness construction
+        let hot_xonly = XOnlyPublicKey::from_str(&self.config.hot_pubkey)?;
+        let cold_ctv_hash = self.compute_cold_ctv_hash()?;
+        
+        // Create trigger script (same as simple vault pattern)
+        let trigger_script = Builder::new()
+            .push_opcode(OP_IF)
+                .push_int(self.config.csv_delay as i64)
+                .push_opcode(OP_CSV)
+                .push_opcode(OP_DROP)
+                .push_x_only_key(&hot_xonly)
+                .push_opcode(OP_CHECKSIG)
+            .push_opcode(OP_ELSE)
+                .push_slice(cold_ctv_hash)
+                .push_opcode(OP_NOP4) // OP_CTV
+            .push_opcode(OP_ENDIF)
+            .into_script();
+
+        // Create trigger Taproot spend info for control block
+        let nums_key = Self::nums_point()?;
+        let spend_info = TaprootBuilder::new()
+            .add_leaf(0, trigger_script.clone())?
+            .finalize(&self.secp, nums_key)
+            .map_err(|e| anyhow!("Failed to finalize trigger taproot: {:?}", e))?;
+        
+        let control_block = spend_info
+            .control_block(&(trigger_script.clone(), LeafVersion::TapScript))
+            .ok_or_else(|| anyhow!("Failed to create control block for trigger script"))?;
+        
+        // Create witness for cold path (ELSE branch, same as simple vault)
+        let mut witness = Witness::new();
+        witness.push(Vec::new()); // Empty for ELSE branch
+        witness.push(trigger_script.to_bytes());
+        witness.push(control_block.serialize());
+        
+        tx.input[0].witness = witness;
+        Ok(tx)
+    }
     
 
     /// Create a CSFS delegation message for emergency authorization

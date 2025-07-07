@@ -550,31 +550,61 @@ async fn execute_hybrid_cold_recovery(
     rpc: &MutinynetClient,
 ) -> Result<()> {
     println!("┌─────────────────────────────────────────────────────────────┐");
-    println!("│              STEP 3: CTV COLD RECOVERY                      │");
+    println!("│               STEP 3: TRIGGER UNVAULT                       │");
     println!("└─────────────────────────────────────────────────────────────┘");
     println!();
 
-    println!("🧊 EXECUTING CTV COLD RECOVERY (Path 1)!");
-    println!("❄️  Emergency covenant recovery - immediate, no timelock");
+    // Create and broadcast trigger transaction (step 1: vault → trigger)
+    println!("🚀 Creating trigger transaction...");
+    let trigger_tx = vault.create_cold_recovery(vault_utxo)?;
+    let trigger_txid = rpc.send_raw_transaction(&trigger_tx)?;
+    println!(" ✅ TXID: {}", trigger_txid);
+    println!("📡 Broadcasting trigger transaction... ✅ Broadcast successful");
+
+    // Wait for confirmation
+    print!("⏳ Waiting for trigger confirmation");
+    while rpc.get_confirmations(&trigger_txid)? == 0 {
+        print!(".");
+        std::io::Write::flush(&mut std::io::stdout())?;
+        sleep(Duration::from_secs(3)).await;
+    }
+    println!(" ✅ {} confirmations", rpc.get_confirmations(&trigger_txid)?);
+
+    let trigger_utxo = OutPoint::new(trigger_txid, 0);
+    println!("📦 Trigger UTXO: {}", trigger_utxo);
+    println!("💸 Amount: {} sats", vault.get_vault_info().amount - 1000);
     println!();
 
-    println!("🔒 Creating cold recovery transaction...");
-    let cold_tx = vault.create_cold_recovery(vault_utxo)?;
+    // Execute cold clawback (step 2: trigger → cold)
+    println!("┌─────────────────────────────────────────────────────────────┐");
+    println!("│              STEP 4: EMERGENCY COLD CLAWBACK                │");
+    println!("└─────────────────────────────────────────────────────────────┘");
+    println!();
+
+    println!("🚨 SIMULATING ATTACK DETECTION!");
+    println!("🏃‍♂️ Executing immediate cold clawback...");
+    println!();
+
+    println!("❄️  Creating cold clawback transaction...");
+    let cold_tx = vault.create_cold_tx(trigger_utxo)?;
     let cold_txid = rpc.send_raw_transaction(&cold_tx)?;
     println!(" ✅ TXID: {}", cold_txid);
+    println!("📡 Broadcasting cold clawback... ✅ Broadcast successful");
 
-    print!("⏳ Waiting for cold recovery confirmation");
+    // Wait for confirmation
+    print!("⏳ Waiting for cold clawback confirmation");
     while rpc.get_confirmations(&cold_txid)? == 0 {
         print!(".");
         std::io::Write::flush(&mut std::io::stdout())?;
         sleep(Duration::from_secs(3)).await;
     }
     println!(" ✅ {} confirmations", rpc.get_confirmations(&cold_txid)?);
+    println!();
 
-    println!("🛡️  CTV COLD RECOVERY COMPLETED");
+    println!("🛡️  FUNDS SECURED IN COLD STORAGE");
     println!("   💰 Amount: {} sats", vault.get_vault_info().amount - 2000);
     println!("   📍 Address: {}", vault.get_vault_info().cold_pubkey);
-    println!("   🔒 CTV covenant enforced - no signatures required!");
+    println!("   ⚡ No delay required - immediate recovery!");
 
     Ok(())
 }
