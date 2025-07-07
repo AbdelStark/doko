@@ -1,107 +1,121 @@
-# Doko Bitcoin Vault - Enterprise Grade System
+# Doko Bitcoin Vault - Frontend Only Implementation
 
 ## Project Overview
 
-Doko is an enterprise-grade Bitcoin vault management system with advanced features including multi-signature support, key delegation, spending limits, and a bold neubrutalist design.
+A pure frontend Bitcoin vault management system that connects directly to Bitcoin RPC nodes, uses browser storage for data persistence, and handles all wallet operations client-side.
 
 ## Table of Contents
 1. [Project Structure](#project-structure)
 2. [Prerequisites](#prerequisites)
 3. [Installation Guide](#installation-guide)
-4. [Project Files](#project-files)
-5. [Configuration](#configuration)
-6. [Development](#development)
-7. [Production Build](#production-build)
-8. [Deployment](#deployment)
+4. [Core Implementation Files](#core-implementation-files)
+5. [Bitcoin RPC Integration](#bitcoin-rpc-integration)
+6. [Browser Storage System](#browser-storage-system)
+7. [Development](#development)
+8. [Production Build](#production-build)
 9. [Security Considerations](#security-considerations)
 
 ## Project Structure
 
 ```
-app/
-├── package.json
-├── package-lock.json
-├── .gitignore
-├── .env.example
+doko/
 ├── README.md
-├── vite.config.js
-├── index.html
-├── public/
-│   ├── favicon.ico
-│   └── assets/
-│       └── icons/
-├── src/
-│   ├── main.jsx
-│   ├── App.jsx
-│   ├── index.css
-│   ├── components/
-│   │   ├── Layout/
-│   │   │   ├── Header.jsx
-│   │   │   ├── Sidebar.jsx
-│   │   │   └── index.js
-│   │   ├── Dashboard/
-│   │   │   ├── Overview.jsx
-│   │   │   ├── StatsCard.jsx
-│   │   │   └── index.js
-│   │   ├── Transactions/
-│   │   │   ├── TransactionList.jsx
-│   │   │   ├── TransactionItem.jsx
-│   │   │   ├── NewTransactionModal.jsx
-│   │   │   └── index.js
-│   │   ├── KeyManagement/
-│   │   │   ├── KeyList.jsx
-│   │   │   ├── KeyCard.jsx
-│   │   │   ├── AddKeyModal.jsx
-│   │   │   └── index.js
-│   │   ├── SpendingLimits/
-│   │   │   ├── LimitsList.jsx
-│   │   │   ├── LimitCard.jsx
-│   │   │   ├── ConfigureLimitModal.jsx
-│   │   │   └── index.js
-│   │   ├── Delegation/
-│   │   │   ├── DelegationRules.jsx
-│   │   │   ├── RuleCard.jsx
-│   │   │   └── index.js
-│   │   └── UI/
-│   │       ├── Button.jsx
-│   │       ├── Modal.jsx
-│   │       ├── Input.jsx
-│   │       ├── Select.jsx
-│   │       └── index.js
-│   ├── hooks/
-│   │   ├── useModal.js
-│   │   ├── useVault.js
-│   │   └── useAnimation.js
-│   ├── services/
-│   │   ├── api.js
-│   │   ├── bitcoin.js
-│   │   ├── auth.js
-│   │   └── storage.js
-│   ├── utils/
-│   │   ├── constants.js
-│   │   ├── formatters.js
-│   │   └── validators.js
-│   └── store/
-│       ├── index.js
-│       ├── vaultSlice.js
-│       ├── transactionSlice.js
-│       └── authSlice.js
+├── docs/
+├── scripts/
+├── app/                          # Frontend application
+│   ├── package.json
+│   ├── package-lock.json
+│   ├── .gitignore
+│   ├── .env.example
+│   ├── vite.config.js
+│   ├── index.html
+│   ├── public/
+│   │   ├── favicon.ico
+│   │   └── manifest.json
+│   └── src/
+│       ├── main.jsx
+│       ├── App.jsx
+│       ├── index.css
+│       ├── components/
+│       │   ├── Layout/
+│       │   │   ├── Header.jsx
+│       │   │   ├── Sidebar.jsx
+│       │   │   └── index.js
+│       │   ├── Dashboard/
+│       │   │   ├── Overview.jsx
+│       │   │   ├── StatsCard.jsx
+│       │   │   └── index.js
+│       │   ├── Wallet/
+│       │   │   ├── WalletCreator.jsx
+│       │   │   ├── WalletImporter.jsx
+│       │   │   ├── WalletBalance.jsx
+│       │   │   └── index.js
+│       │   ├── Transactions/
+│       │   │   ├── TransactionBuilder.jsx
+│       │   │   ├── TransactionSigner.jsx
+│       │   │   ├── TransactionHistory.jsx
+│       │   │   └── index.js
+│       │   ├── Vault/
+│       │   │   ├── VaultCreator.jsx
+│       │   │   ├── MultisigManager.jsx
+│       │   │   ├── KeyManager.jsx
+│       │   │   └── index.js
+│       │   └── UI/
+│       │       ├── Button.jsx
+│       │       ├── Modal.jsx
+│       │       ├── Input.jsx
+│       │       └── index.js
+│       ├── lib/
+│       │   ├── bitcoin/
+│       │   │   ├── rpc.js
+│       │   │   ├── wallet.js
+│       │   │   ├── transaction.js
+│       │   │   ├── multisig.js
+│       │   │   └── index.js
+│       │   ├── storage/
+│       │   │   ├── vault.js
+│       │   │   ├── wallet.js
+│       │   │   ├── transaction.js
+│       │   │   └── index.js
+│       │   └── crypto/
+│       │       ├── encryption.js
+│       │       └── index.js
+│       ├── hooks/
+│       │   ├── useBitcoinRPC.js
+│       │   ├── useWallet.js
+│       │   ├── useVault.js
+│       │   └── useLocalStorage.js
+│       ├── utils/
+│       │   ├── constants.js
+│       │   ├── formatters.js
+│       │   └── validators.js
+│       └── context/
+│           ├── BitcoinContext.jsx
+│           ├── VaultContext.jsx
+│           └── index.js
+└── other-project-files/
 ```
 
 ## Prerequisites
 
 - Node.js 18+ and npm 9+
-- Git
-- A modern web browser
-- (Optional) Bitcoin Core or Bitcoin testnet for real integration
+- Access to a Bitcoin RPC node (local or remote)
+- Modern web browser with IndexedDB support
 
 ## Installation Guide
 
-### Step 1: Create Project Directory
+### Step 1: Create Project Structure
 
 ```bash
-mkdir doko-bitcoin-vault
-cd doko-bitcoin-vault
+# Create main project directory
+mkdir doko
+cd doko
+
+# Create frontend app directory
+mkdir app
+cd app
+
+# Initialize package.json
 npm init -y
 ```
 
@@ -110,21 +124,25 @@ npm init -y
 ```bash
 # Core dependencies
 npm install react react-dom react-router-dom
-npm install @reduxjs/toolkit react-redux
+npm install bitcoinjs-lib
+npm install @noble/secp256k1 @noble/hashes
+npm install bip39 bip32
+npm install buffer events
 npm install axios
 npm install framer-motion
 npm install react-hot-toast
 npm install date-fns
-npm install bitcoinjs-lib
-npm install @noble/secp256k1
-npm install bip39
 npm install uuid
+npm install idb
+npm install qrcode.react
 
 # Development dependencies
 npm install -D vite @vitejs/plugin-react
-npm install -D eslint prettier
-npm install -D @types/react @types/react-dom
+npm install -D @esbuild-plugins/node-globals-polyfill
+npm install -D @esbuild-plugins/node-modules-polyfill
+npm install -D rollup-plugin-polyfill-node
 npm install -D tailwindcss postcss autoprefixer
+npm install -D @types/react @types/react-dom
 ```
 
 ### Step 3: Initialize Tailwind CSS
@@ -133,46 +151,51 @@ npm install -D tailwindcss postcss autoprefixer
 npx tailwindcss init -p
 ```
 
-## Project Files
+## Core Implementation Files
 
 ### 1. package.json
 
 ```json
 {
-  "name": "doko-bitcoin-vault",
+  "name": "doko-bitcoin-vault-app",
   "version": "1.0.0",
-  "description": "Enterprise-grade Bitcoin vault management system",
+  "description": "Frontend-only Bitcoin vault management system",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "lint": "eslint src --ext js,jsx --report-unused-disable-directives --max-warnings 0",
     "format": "prettier --write \"src/**/*.{js,jsx,css}\""
   },
   "dependencies": {
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.21.0",
-    "@reduxjs/toolkit": "^2.0.1",
-    "react-redux": "^9.0.4",
+    "bitcoinjs-lib": "^6.1.5",
+    "@noble/secp256k1": "^2.0.0",
+    "@noble/hashes": "^1.3.3",
+    "bip39": "^3.1.0",
+    "bip32": "^4.0.0",
+    "buffer": "^6.0.3",
+    "events": "^3.3.0",
     "axios": "^1.6.2",
     "framer-motion": "^10.16.16",
     "react-hot-toast": "^2.4.1",
     "date-fns": "^3.0.6",
-    "bitcoinjs-lib": "^6.1.5",
-    "@noble/secp256k1": "^2.0.0",
-    "bip39": "^3.1.0",
-    "uuid": "^9.0.1"
+    "uuid": "^9.0.1",
+    "idb": "^8.0.0",
+    "qrcode.react": "^3.1.0"
   },
   "devDependencies": {
     "vite": "^5.0.10",
     "@vitejs/plugin-react": "^4.2.1",
-    "eslint": "^8.56.0",
-    "prettier": "^3.1.1",
+    "@esbuild-plugins/node-globals-polyfill": "^0.2.3",
+    "@esbuild-plugins/node-modules-polyfill": "^0.2.2",
+    "rollup-plugin-polyfill-node": "^0.13.0",
     "tailwindcss": "^3.4.0",
     "postcss": "^8.4.32",
-    "autoprefixer": "^10.4.16"
+    "autoprefixer": "^10.4.16",
+    "prettier": "^3.1.1"
   }
 }
 ```
@@ -182,30 +205,71 @@ npx tailwindcss init -p
 ```javascript
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { NodeGlobalsPolyfillPlugin } from '@esbuild-plugins/node-globals-polyfill'
+import { NodeModulesPolyfillPlugin } from '@esbuild-plugins/node-modules-polyfill'
+import rollupNodePolyFill from 'rollup-plugin-polyfill-node'
 
 export default defineConfig({
   plugins: [react()],
-  server: {
-    port: 3000,
-    open: true
+  resolve: {
+    alias: {
+      buffer: 'rollup-plugin-node-polyfills/polyfills/buffer-es6',
+      stream: 'rollup-plugin-node-polyfills/polyfills/stream',
+      events: 'rollup-plugin-node-polyfills/polyfills/events',
+      util: 'rollup-plugin-node-polyfills/polyfills/util',
+    },
+  },
+  optimizeDeps: {
+    esbuildOptions: {
+      define: {
+        global: 'globalThis',
+      },
+      plugins: [
+        NodeGlobalsPolyfillPlugin({
+          process: true,
+          buffer: true,
+        }),
+        NodeModulesPolyfillPlugin(),
+      ],
+    },
   },
   build: {
-    outDir: 'dist',
-    sourcemap: true,
     rollupOptions: {
-      output: {
-        manualChunks: {
-          vendor: ['react', 'react-dom', 'react-router-dom'],
-          redux: ['@reduxjs/toolkit', 'react-redux'],
-          bitcoin: ['bitcoinjs-lib', '@noble/secp256k1', 'bip39']
-        }
-      }
-    }
-  }
+      plugins: [rollupNodePolyFill()],
+    },
+  },
+  server: {
+    port: 3000,
+    open: true,
+  },
 })
 ```
 
-### 3. tailwind.config.js
+### 3. .env.example
+
+```env
+# Bitcoin RPC Configuration
+VITE_BITCOIN_NETWORK=testnet
+VITE_BITCOIN_RPC_URL=http://localhost:8332
+VITE_BITCOIN_RPC_USER=your_rpc_user
+VITE_BITCOIN_RPC_PASS=your_rpc_password
+
+# Alternative: Use public APIs for testnet
+VITE_USE_PUBLIC_API=true
+VITE_BLOCKSTREAM_API_URL=https://blockstream.info/testnet/api
+VITE_MEMPOOL_API_URL=https://mempool.space/testnet/api
+
+# App Configuration
+VITE_DEFAULT_FEE_RATE=10
+VITE_MAX_FEE_RATE=100
+VITE_DUST_LIMIT=546
+
+# Security
+VITE_ENABLE_ENCRYPTION=true
+VITE_SESSION_TIMEOUT=3600000
+```
+
+### 4. tailwind.config.js
 
 ```javascript
 /** @type {import('tailwindcss').Config} */
@@ -244,232 +308,913 @@ export default {
         'brutal-sm': '4px 4px 0px rgba(0,0,0,1)',
         'brutal-lg': '12px 12px 0px rgba(0,0,0,1)',
       },
-      keyframes: {
-        slideIn: {
-          'from': { transform: 'translateX(-100%)' },
-          'to': { transform: 'translateX(0)' }
-        },
-        pulse: {
-          '0%, 100%': { transform: 'scale(1)' },
-          '50%': { transform: 'scale(1.05)' }
-        }
-      },
-      animation: {
-        'slide-in': 'slideIn 0.5s ease',
-        'pulse': 'pulse 2s infinite'
-      }
     },
   },
   plugins: [],
 }
 ```
 
-### 4. .env.example
+### 5. src/lib/bitcoin/rpc.js
 
-```env
-# API Configuration
-VITE_API_URL=http://localhost:8080/api
-VITE_WEBSOCKET_URL=ws://localhost:8080/ws
+```javascript
+import axios from 'axios'
 
-# Bitcoin Network
-VITE_BITCOIN_NETWORK=testnet
-VITE_BITCOIN_NODE_URL=http://localhost:8332
-
-# Security
-VITE_ENCRYPTION_KEY=your-encryption-key-here
-VITE_SESSION_TIMEOUT=3600000
-
-# Features
-VITE_ENABLE_TESTNET=true
-VITE_ENABLE_MAINNET=false
-VITE_ENABLE_HARDWARE_WALLET=true
-```
-
-### 5. index.html
-
-```html
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" type="image/x-icon" href="/favicon.ico" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Enterprise-grade Bitcoin vault management system" />
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <title>Doko - Bitcoin Vault</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
-  </body>
-</html>
-```
-
-### 6. src/main.jsx
-
-```jsx
-import React from 'react'
-import ReactDOM from 'react-dom/client'
-import { Provider } from 'react-redux'
-import { BrowserRouter } from 'react-router-dom'
-import { Toaster } from 'react-hot-toast'
-import App from './App'
-import { store } from './store'
-import './index.css'
-
-ReactDOM.createRoot(document.getElementById('root')).render(
-  <React.StrictMode>
-    <Provider store={store}>
-      <BrowserRouter>
-        <App />
-        <Toaster
-          position="top-right"
-          toastOptions={{
-            style: {
-              border: '3px solid #000',
-              padding: '16px',
-              background: '#fff',
-              color: '#000',
-              fontFamily: 'Space Grotesk, monospace',
-              fontWeight: 600,
-              boxShadow: '4px 4px 0px rgba(0,0,0,1)',
-            },
-            success: {
-              style: {
-                background: '#00FF88',
-              },
-            },
-            error: {
-              style: {
-                background: '#FF0066',
-                color: '#fff',
-              },
-            },
-          }}
-        />
-      </BrowserRouter>
-    </Provider>
-  </React.StrictMode>
-)
-```
-
-### 7. src/index.css
-
-```css
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
-@layer base {
-  * {
-    @apply box-border;
+class BitcoinRPC {
+  constructor(config) {
+    this.usePublicAPI = config.usePublicAPI || import.meta.env.VITE_USE_PUBLIC_API === 'true'
+    
+    if (this.usePublicAPI) {
+      this.blockstreamAPI = axios.create({
+        baseURL: config.blockstreamURL || import.meta.env.VITE_BLOCKSTREAM_API_URL,
+      })
+      this.mempoolAPI = axios.create({
+        baseURL: config.mempoolURL || import.meta.env.VITE_MEMPOOL_API_URL,
+      })
+    } else {
+      this.rpcClient = axios.create({
+        baseURL: config.rpcURL || import.meta.env.VITE_BITCOIN_RPC_URL,
+        auth: {
+          username: config.rpcUser || import.meta.env.VITE_BITCOIN_RPC_USER,
+          password: config.rpcPass || import.meta.env.VITE_BITCOIN_RPC_PASS,
+        },
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      })
+    }
   }
 
-  body {
-    @apply font-grotesk bg-light text-dark overflow-x-hidden;
-    background-image: repeating-linear-gradient(
-      45deg,
-      transparent,
-      transparent 35px,
-      rgba(0, 0, 0, 0.05) 35px,
-      rgba(0, 0, 0, 0.05) 70px
-    );
+  // Generic RPC call method
+  async call(method, params = []) {
+    if (this.usePublicAPI) {
+      throw new Error(`RPC method ${method} not available via public API`)
+    }
+
+    const response = await this.rpcClient.post('/', {
+      jsonrpc: '2.0',
+      id: Date.now(),
+      method,
+      params,
+    })
+
+    if (response.data.error) {
+      throw new Error(response.data.error.message)
+    }
+
+    return response.data.result
   }
 
-  h1, h2, h3, h4, h5, h6 {
-    @apply font-bold tracking-tight;
-  }
-}
-
-@layer components {
-  .brutal-border {
-    @apply border-4 border-dark;
-  }
-
-  .brutal-shadow {
-    @apply shadow-brutal;
-  }
-
-  .brutal-shadow-sm {
-    @apply shadow-brutal-sm;
-  }
-
-  .brutal-shadow-lg {
-    @apply shadow-brutal-lg;
-  }
-
-  .brutal-btn {
-    @apply px-6 py-3 brutal-border bg-light font-semibold uppercase 
-           transition-all duration-200 cursor-pointer inline-flex items-center gap-2
-           hover:-translate-x-1 hover:-translate-y-1 hover:shadow-brutal-sm;
-  }
-
-  .brutal-btn-primary {
-    @apply brutal-btn bg-primary text-dark;
+  // Get address balance using public APIs
+  async getBalance(address) {
+    if (this.usePublicAPI) {
+      try {
+        const response = await this.blockstreamAPI.get(`/address/${address}`)
+        const stats = response.data.chain_stats
+        const balance = (stats.funded_txo_sum - stats.spent_txo_sum) / 100000000
+        return {
+          confirmed: balance,
+          unconfirmed: response.data.mempool_stats.funded_txo_sum / 100000000,
+          address,
+        }
+      } catch (error) {
+        console.error('Error fetching balance:', error)
+        throw error
+      }
+    } else {
+      // Use local RPC
+      const response = await this.call('scantxoutset', ['start', [`addr(${address})`]])
+      return {
+        confirmed: response.total_amount,
+        unconfirmed: 0,
+        address,
+      }
+    }
   }
 
-  .brutal-btn-secondary {
-    @apply brutal-btn bg-secondary text-dark;
+  // Get UTXOs for an address
+  async getUTXOs(address) {
+    if (this.usePublicAPI) {
+      try {
+        const response = await this.blockstreamAPI.get(`/address/${address}/utxo`)
+        return response.data.map(utxo => ({
+          txid: utxo.txid,
+          vout: utxo.vout,
+          value: utxo.value,
+          confirmations: utxo.status.confirmed ? utxo.status.block_height : 0,
+        }))
+      } catch (error) {
+        console.error('Error fetching UTXOs:', error)
+        throw error
+      }
+    } else {
+      const response = await this.call('scantxoutset', ['start', [`addr(${address})`]])
+      return response.unspents
+    }
   }
 
-  .brutal-btn-danger {
-    @apply brutal-btn bg-danger text-light;
+  // Get transaction details
+  async getTransaction(txid) {
+    if (this.usePublicAPI) {
+      try {
+        const response = await this.blockstreamAPI.get(`/tx/${txid}`)
+        return response.data
+      } catch (error) {
+        console.error('Error fetching transaction:', error)
+        throw error
+      }
+    } else {
+      return await this.call('getrawtransaction', [txid, true])
+    }
   }
 
-  .brutal-btn-success {
-    @apply brutal-btn bg-success text-dark;
-  }
-
-  .brutal-input {
-    @apply w-full px-4 py-3 brutal-border bg-light font-medium
-           transition-all duration-200
-           focus:outline-none focus:bg-gray-100 focus:-translate-x-0.5 
-           focus:-translate-y-0.5 focus:shadow-brutal-sm;
-  }
-
-  .brutal-card {
-    @apply brutal-border brutal-shadow bg-light p-6
-           transition-all duration-200
-           hover:-translate-x-1 hover:-translate-y-1 hover:shadow-brutal-lg;
-  }
-
-  .brutal-panel {
-    @apply brutal-border brutal-shadow bg-light p-8;
-  }
-
-  .status-dot {
-    @apply w-3 h-3 rounded-full border-2 border-dark;
-  }
-
-  .status-dot-active {
-    @apply status-dot bg-success;
-  }
-
-  .status-dot-inactive {
-    @apply status-dot bg-gray-300;
+  // Broadcast transaction
+  async broadcastTransaction(psbt) {
+    const tx = psbt.extractTransaction()
+    const txHex = tx.toHex()
+    const txid = await this.rpc.broadcastTransaction(txHex)
+    return { txid, hex: txHex }
   }
 }
 
-@layer utilities {
-  .animate-slide-in {
-    animation: slideIn 0.5s ease;
+export default TransactionBuilder
+```
+
+### 8. src/lib/bitcoin/multisig.js
+
+```javascript
+import * as bitcoin from 'bitcoinjs-lib'
+import { Buffer } from 'buffer'
+
+const NETWORK = import.meta.env.VITE_BITCOIN_NETWORK === 'mainnet' 
+  ? bitcoin.networks.bitcoin 
+  : bitcoin.networks.testnet
+
+class MultisigVault {
+  constructor(config) {
+    this.m = config.m // Required signatures
+    this.n = config.n // Total keys
+    this.publicKeys = config.publicKeys || []
+    this.name = config.name
+    this.created = config.created || new Date().toISOString()
   }
 
-  .animate-pulse {
-    animation: pulse 2s infinite;
+  // Add public key to vault
+  addPublicKey(pubkey) {
+    if (this.publicKeys.length >= this.n) {
+      throw new Error(`Vault already has ${this.n} keys`)
+    }
+    
+    // Validate public key
+    try {
+      Buffer.from(pubkey, 'hex')
+      if (pubkey.length !== 66 && pubkey.length !== 130) {
+        throw new Error('Invalid public key length')
+      }
+    } catch (error) {
+      throw new Error(`Invalid public key: ${error.message}`)
+    }
+
+    this.publicKeys.push(pubkey)
+    return this.publicKeys.length === this.n
   }
+
+  // Generate multisig address
+  generateAddress() {
+    if (this.publicKeys.length !== this.n) {
+      throw new Error(`Need ${this.n} public keys, have ${this.publicKeys.length}`)
+    }
+
+    // Sort public keys for deterministic address generation
+    const sortedPubkeys = [...this.publicKeys]
+      .map(hex => Buffer.from(hex, 'hex'))
+      .sort(Buffer.compare)
+
+    // Create P2MS (Pay to Multisig)
+    const p2ms = bitcoin.payments.p2ms({
+      m: this.m,
+      pubkeys: sortedPubkeys,
+      network: NETWORK,
+    })
+
+    // Wrap in P2WSH (Pay to Witness Script Hash) for SegWit
+    const p2wsh = bitcoin.payments.p2wsh({
+      redeem: p2ms,
+      network: NETWORK,
+    })
+
+    return {
+      address: p2wsh.address,
+      redeemScript: p2ms.output.toString('hex'),
+      witnessScript: p2wsh.redeem.output.toString('hex'),
+      scriptPubKey: p2wsh.output.toString('hex'),
+    }
+  }
+
+  // Create spending transaction
+  createSpendingTransaction({
+    inputs, // Array of { txid, vout, value }
+    outputs, // Array of { address, value }
+    fee,
+    changeAddress,
+  }) {
+    const psbt = new bitcoin.Psbt({ network: NETWORK })
+    const { redeemScript, witnessScript } = this.generateAddress()
+
+    // Add inputs
+    for (const input of inputs) {
+      psbt.addInput({
+        hash: input.txid,
+        index: input.vout,
+        witnessUtxo: {
+          script: Buffer.from(this.generateAddress().scriptPubKey, 'hex'),
+          value: input.value,
+        },
+        witnessScript: Buffer.from(witnessScript, 'hex'),
+      })
+    }
+
+    // Add outputs
+    let totalOut = 0
+    for (const output of outputs) {
+      psbt.addOutput({
+        address: output.address,
+        value: output.value,
+      })
+      totalOut += output.value
+    }
+
+    // Calculate change
+    const totalIn = inputs.reduce((sum, input) => sum + input.value, 0)
+    const change = totalIn - totalOut - fee
+
+    // Add change output if above dust limit
+    const dustLimit = parseInt(import.meta.env.VITE_DUST_LIMIT) || 546
+    if (change > dustLimit) {
+      psbt.addOutput({
+        address: changeAddress || this.generateAddress().address,
+        value: change,
+      })
+    }
+
+    return psbt
+  }
+
+  // Partially sign transaction
+  partiallySign(psbt, privateKey) {
+    const keyPair = bitcoin.ECPair.fromPrivateKey(
+      Buffer.from(privateKey, 'hex'),
+      { network: NETWORK }
+    )
+
+    // Check if this key is part of the vault
+    const pubkey = keyPair.publicKey.toString('hex')
+    if (!this.publicKeys.includes(pubkey)) {
+      throw new Error('Private key does not belong to this vault')
+    }
+
+    // Sign all inputs
+    let signed = 0
+    for (let i = 0; i < psbt.inputCount; i++) {
+      try {
+        psbt.signInput(i, keyPair)
+        signed++
+      } catch (error) {
+        console.warn(`Could not sign input ${i}:`, error.message)
+      }
+    }
+
+    return {
+      signed,
+      total: psbt.inputCount,
+      isComplete: this.isTransactionComplete(psbt),
+    }
+  }
+
+  // Check if transaction has enough signatures
+  isTransactionComplete(psbt) {
+    try {
+      psbt.finalizeAllInputs()
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  // Combine multiple partially signed transactions
+  static combinePSBTs(psbts) {
+    if (psbts.length === 0) {
+      throw new Error('No PSBTs to combine')
+    }
+
+    let combined = bitcoin.Psbt.fromBase64(psbts[0], { network: NETWORK })
+    
+    for (let i = 1; i < psbts.length; i++) {
+      const psbt = bitcoin.Psbt.fromBase64(psbts[i], { network: NETWORK })
+      combined = combined.combine(psbt)
+    }
+
+    return combined
+  }
+
+  // Export vault configuration
+  export() {
+    return {
+      m: this.m,
+      n: this.n,
+      publicKeys: this.publicKeys,
+      name: this.name,
+      created: this.created,
+      address: this.publicKeys.length === this.n ? this.generateAddress().address : null,
+    }
+  }
+
+  // Import vault configuration
+  static import(config) {
+    return new MultisigVault(config)
+  }
+}
+
+export default MultisigVault
+```
+
+### 9. src/lib/storage/vault.js
+
+```javascript
+import { openDB } from 'idb'
+import { encrypt, decrypt } from '../crypto/encryption'
+
+const DB_NAME = 'DokoVaultDB'
+const DB_VERSION = 1
+
+class VaultStorage {
+  constructor() {
+    this.db = null
+    this.isEncrypted = import.meta.env.VITE_ENABLE_ENCRYPTION === 'true'
+  }
+
+  async init() {
+    this.db = await openDB(DB_NAME, DB_VERSION, {
+      upgrade(db) {
+        // Vaults store
+        if (!db.objectStoreNames.contains('vaults')) {
+          const vaultStore = db.createObjectStore('vaults', { keyPath: 'id' })
+          vaultStore.createIndex('name', 'name')
+          vaultStore.createIndex('created', 'created')
+        }
+
+        // Wallets store
+        if (!db.objectStoreNames.contains('wallets')) {
+          const walletStore = db.createObjectStore('wallets', { keyPath: 'id' })
+          walletStore.createIndex('name', 'name')
+          walletStore.createIndex('created', 'created')
+        }
+
+        // Transactions store
+        if (!db.objectStoreNames.contains('transactions')) {
+          const txStore = db.createObjectStore('transactions', { keyPath: 'id' })
+          txStore.createIndex('txid', 'txid')
+          txStore.createIndex('vaultId', 'vaultId')
+          txStore.createIndex('created', 'created')
+          txStore.createIndex('status', 'status')
+        }
+
+        // Keys store (for multisig participants)
+        if (!db.objectStoreNames.contains('keys')) {
+          const keyStore = db.createObjectStore('keys', { keyPath: 'id' })
+          keyStore.createIndex('vaultId', 'vaultId')
+          keyStore.createIndex('name', 'name')
+        }
+
+        // Settings store
+        if (!db.objectStoreNames.contains('settings')) {
+          db.createObjectStore('settings', { keyPath: 'key' })
+        }
+      },
+    })
+  }
+
+  // Vault operations
+  async saveVault(vault) {
+    const data = this.isEncrypted 
+      ? { ...vault, data: await encrypt(vault.data) }
+      : vault
+
+    await this.db.put('vaults', data)
+    return vault.id
+  }
+
+  async getVault(id) {
+    const vault = await this.db.get('vaults', id)
+    if (!vault) return null
+
+    if (this.isEncrypted && vault.data) {
+      vault.data = await decrypt(vault.data)
+    }
+
+    return vault
+  }
+
+  async getAllVaults() {
+    const vaults = await this.db.getAll('vaults')
+    
+    if (this.isEncrypted) {
+      for (const vault of vaults) {
+        if (vault.data) {
+          vault.data = await decrypt(vault.data)
+        }
+      }
+    }
+
+    return vaults
+  }
+
+  async deleteVault(id) {
+    // Delete vault and all related data
+    const tx = this.db.transaction(['vaults', 'transactions', 'keys'], 'readwrite')
+    
+    // Delete vault
+    await tx.objectStore('vaults').delete(id)
+    
+    // Delete related transactions
+    const txStore = tx.objectStore('transactions')
+    const txIndex = txStore.index('vaultId')
+    const txs = await txIndex.getAllKeys(id)
+    for (const txId of txs) {
+      await txStore.delete(txId)
+    }
+    
+    // Delete related keys
+    const keyStore = tx.objectStore('keys')
+    const keyIndex = keyStore.index('vaultId')
+    const keys = await keyIndex.getAllKeys(id)
+    for (const keyId of keys) {
+      await keyStore.delete(keyId)
+    }
+    
+    await tx.done
+  }
+
+  // Wallet operations
+  async saveWallet(wallet) {
+    const data = this.isEncrypted && wallet.mnemonic
+      ? { ...wallet, mnemonic: await encrypt(wallet.mnemonic) }
+      : wallet
+
+    await this.db.put('wallets', data)
+    return wallet.id
+  }
+
+  async getWallet(id) {
+    const wallet = await this.db.get('wallets', id)
+    if (!wallet) return null
+
+    if (this.isEncrypted && wallet.mnemonic) {
+      wallet.mnemonic = await decrypt(wallet.mnemonic)
+    }
+
+    return wallet
+  }
+
+  async getAllWallets() {
+    const wallets = await this.db.getAll('wallets')
+    
+    if (this.isEncrypted) {
+      for (const wallet of wallets) {
+        if (wallet.mnemonic) {
+          wallet.mnemonic = await decrypt(wallet.mnemonic)
+        }
+      }
+    }
+
+    return wallets
+  }
+
+  // Transaction operations
+  async saveTransaction(transaction) {
+    await this.db.put('transactions', transaction)
+    return transaction.id
+  }
+
+  async getTransaction(id) {
+    return await this.db.get('transactions', id)
+  }
+
+  async getTransactionsByVault(vaultId, limit = 50) {
+    const index = this.db.transaction('transactions').store.index('vaultId')
+    const transactions = []
+    
+    let cursor = await index.openCursor(vaultId, 'prev')
+    while (cursor && transactions.length < limit) {
+      transactions.push(cursor.value)
+      cursor = await cursor.continue()
+    }
+    
+    return transactions
+  }
+
+  async updateTransactionStatus(id, status) {
+    const tx = await this.db.get('transactions', id)
+    if (tx) {
+      tx.status = status
+      tx.updated = new Date().toISOString()
+      await this.db.put('transactions', tx)
+    }
+  }
+
+  // Key management
+  async saveKey(key) {
+    const data = this.isEncrypted && key.privateKey
+      ? { ...key, privateKey: await encrypt(key.privateKey) }
+      : key
+
+    await this.db.put('keys', data)
+    return key.id
+  }
+
+  async getKey(id) {
+    const key = await this.db.get('keys', id)
+    if (!key) return null
+
+    if (this.isEncrypted && key.privateKey) {
+      key.privateKey = await decrypt(key.privateKey)
+    }
+
+    return key
+  }
+
+  async getKeysByVault(vaultId) {
+    const index = this.db.transaction('keys').store.index('vaultId')
+    const keys = await index.getAll(vaultId)
+    
+    if (this.isEncrypted) {
+      for (const key of keys) {
+        if (key.privateKey) {
+          key.privateKey = await decrypt(key.privateKey)
+        }
+      }
+    }
+
+    return keys
+  }
+
+  // Settings
+  async saveSetting(key, value) {
+    await this.db.put('settings', { key, value })
+  }
+
+  async getSetting(key) {
+    const setting = await this.db.get('settings', key)
+    return setting?.value
+  }
+
+  // Clear all data
+  async clearAll() {
+    const stores = ['vaults', 'wallets', 'transactions', 'keys', 'settings']
+    const tx = this.db.transaction(stores, 'readwrite')
+    
+    for (const store of stores) {
+      await tx.objectStore(store).clear()
+    }
+    
+    await tx.done
+  }
+
+  // Export all data
+  async exportData() {
+    const data = {
+      vaults: await this.db.getAll('vaults'),
+      wallets: await this.db.getAll('wallets'),
+      transactions: await this.db.getAll('transactions'),
+      keys: await this.db.getAll('keys'),
+      settings: await this.db.getAll('settings'),
+      exported: new Date().toISOString(),
+    }
+
+    return data
+  }
+
+  // Import data
+  async importData(data) {
+    const tx = this.db.transaction(
+      ['vaults', 'wallets', 'transactions', 'keys', 'settings'], 
+      'readwrite'
+    )
+
+    // Clear existing data
+    for (const store of ['vaults', 'wallets', 'transactions', 'keys', 'settings']) {
+      await tx.objectStore(store).clear()
+    }
+
+    // Import new data
+    if (data.vaults) {
+      for (const vault of data.vaults) {
+        await tx.objectStore('vaults').put(vault)
+      }
+    }
+
+    if (data.wallets) {
+      for (const wallet of data.wallets) {
+        await tx.objectStore('wallets').put(wallet)
+      }
+    }
+
+    if (data.transactions) {
+      for (const transaction of data.transactions) {
+        await tx.objectStore('transactions').put(transaction)
+      }
+    }
+
+    if (data.keys) {
+      for (const key of data.keys) {
+        await tx.objectStore('keys').put(key)
+      }
+    }
+
+    if (data.settings) {
+      for (const setting of data.settings) {
+        await tx.objectStore('settings').put(setting)
+      }
+    }
+
+    await tx.done
+  }
+}
+
+export default new VaultStorage()
+```
+
+### 10. src/lib/crypto/encryption.js
+
+```javascript
+import { Buffer } from 'buffer'
+
+// Simple encryption for demo - in production use Web Crypto API
+class Encryption {
+  constructor() {
+    this.algorithm = 'AES-GCM'
+    this.keyLength = 256
+  }
+
+  async generateKey() {
+    return await crypto.subtle.generateKey(
+      {
+        name: this.algorithm,
+        length: this.keyLength,
+      },
+      true,
+      ['encrypt', 'decrypt']
+    )
+  }
+
+  async deriveKey(password, salt) {
+    const encoder = new TextEncoder()
+    const keyMaterial = await crypto.subtle.importKey(
+      'raw',
+      encoder.encode(password),
+      'PBKDF2',
+      false,
+      ['deriveBits', 'deriveKey']
+    )
+
+    return await crypto.subtle.deriveKey(
+      {
+        name: 'PBKDF2',
+        salt: salt,
+        iterations: 100000,
+        hash: 'SHA-256',
+      },
+      keyMaterial,
+      { name: this.algorithm, length: this.keyLength },
+      true,
+      ['encrypt', 'decrypt']
+    )
+  }
+
+  async encrypt(data, password) {
+    const encoder = new TextEncoder()
+    const salt = crypto.getRandomValues(new Uint8Array(16))
+    const iv = crypto.getRandomValues(new Uint8Array(12))
+    
+    const key = await this.deriveKey(password || 'default-key', salt)
+    
+    const encrypted = await crypto.subtle.encrypt(
+      {
+        name: this.algorithm,
+        iv: iv,
+      },
+      key,
+      encoder.encode(JSON.stringify(data))
+    )
+
+    // Combine salt, iv, and encrypted data
+    const combined = new Uint8Array(salt.length + iv.length + encrypted.byteLength)
+    combined.set(salt, 0)
+    combined.set(iv, salt.length)
+    combined.set(new Uint8Array(encrypted), salt.length + iv.length)
+
+    return Buffer.from(combined).toString('base64')
+  }
+
+  async decrypt(encryptedData, password) {
+    const combined = Buffer.from(encryptedData, 'base64')
+    
+    const salt = combined.slice(0, 16)
+    const iv = combined.slice(16, 28)
+    const data = combined.slice(28)
+    
+    const key = await this.deriveKey(password || 'default-key', salt)
+    
+    const decrypted = await crypto.subtle.decrypt(
+      {
+        name: this.algorithm,
+        iv: iv,
+      },
+      key,
+      data
+    )
+
+    const decoder = new TextDecoder()
+    return JSON.parse(decoder.decode(decrypted))
+  }
+}
+
+// For demo purposes - in production, handle encryption keys more securely
+export const encrypt = async (data) => {
+  const encryption = new Encryption()
+  return await encryption.encrypt(data)
+}
+
+export const decrypt = async (data) => {
+  const encryption = new Encryption()
+  return await encryption.decrypt(data)
 }
 ```
 
-### 8. src/App.jsx
+### 11. src/context/BitcoinContext.jsx
+
+```javascript
+import React, { createContext, useContext, useState, useEffect } from 'react'
+import BitcoinRPC from '../lib/bitcoin/rpc'
+import BitcoinWallet from '../lib/bitcoin/wallet'
+import TransactionBuilder from '../lib/bitcoin/transaction'
+import vaultStorage from '../lib/storage/vault'
+
+const BitcoinContext = createContext()
+
+export const useBitcoin = () => {
+  const context = useContext(BitcoinContext)
+  if (!context) {
+    throw new Error('useBitcoin must be used within BitcoinProvider')
+  }
+  return context
+}
+
+export const BitcoinProvider = ({ children }) => {
+  const [rpc, setRPC] = useState(null)
+  const [wallet, setWallet] = useState(null)
+  const [txBuilder, setTxBuilder] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
+  const [network, setNetwork] = useState(import.meta.env.VITE_BITCOIN_NETWORK || 'testnet')
+
+  useEffect(() => {
+    initializeBitcoin()
+  }, [])
+
+  const initializeBitcoin = async () => {
+    try {
+      // Initialize storage
+      await vaultStorage.init()
+
+      // Initialize RPC client
+      const rpcClient = new BitcoinRPC({
+        usePublicAPI: import.meta.env.VITE_USE_PUBLIC_API === 'true',
+      })
+      setRPC(rpcClient)
+
+      // Initialize transaction builder
+      const builder = new TransactionBuilder(rpcClient)
+      setTxBuilder(builder)
+
+      // Load saved wallet if exists
+      const wallets = await vaultStorage.getAllWallets()
+      if (wallets.length > 0) {
+        const savedWallet = wallets[0]
+        const restoredWallet = BitcoinWallet.fromBackup(savedWallet)
+        setWallet(restoredWallet)
+      }
+
+      setLoading(false)
+    } catch (err) {
+      console.error('Failed to initialize Bitcoin:', err)
+      setError(err.message)
+      setLoading(false)
+    }
+  }
+
+  const createWallet = async (name) => {
+    try {
+      const newWallet = new BitcoinWallet()
+      const backup = newWallet.getBackup()
+      
+      // Save to storage
+      await vaultStorage.saveWallet({
+        id: `wallet-${Date.now()}`,
+        name,
+        ...backup,
+        created: new Date().toISOString(),
+      })
+
+      setWallet(newWallet)
+      return newWallet
+    } catch (err) {
+      console.error('Failed to create wallet:', err)
+      throw err
+    }
+  }
+
+  const importWallet = async (mnemonic, name) => {
+    try {
+      if (!BitcoinWallet.validateMnemonic(mnemonic)) {
+        throw new Error('Invalid mnemonic phrase')
+      }
+
+      const importedWallet = new BitcoinWallet(mnemonic)
+      const backup = importedWallet.getBackup()
+
+      // Save to storage
+      await vaultStorage.saveWallet({
+        id: `wallet-${Date.now()}`,
+        name,
+        ...backup,
+        created: new Date().toISOString(),
+      })
+
+      setWallet(importedWallet)
+      return importedWallet
+    } catch (err) {
+      console.error('Failed to import wallet:', err)
+      throw err
+    }
+  }
+
+  const getBalance = async (address) => {
+    if (!rpc) throw new Error('RPC not initialized')
+    return await rpc.getBalance(address)
+  }
+
+  const getUTXOs = async (address) => {
+    if (!rpc) throw new Error('RPC not initialized')
+    return await rpc.getUTXOs(address)
+  }
+
+  const createTransaction = async (params) => {
+    if (!txBuilder) throw new Error('Transaction builder not initialized')
+    return await txBuilder.buildSendTransaction(params)
+  }
+
+  const broadcastTransaction = async (psbt) => {
+    if (!txBuilder) throw new Error('Transaction builder not initialized')
+    return await txBuilder.broadcastTransaction(psbt)
+  }
+
+  const value = {
+    // State
+    rpc,
+    wallet,
+    txBuilder,
+    loading,
+    error,
+    network,
+
+    // Methods
+    createWallet,
+    importWallet,
+    getBalance,
+    getUTXOs,
+    createTransaction,
+    broadcastTransaction,
+
+    // Storage
+    storage: vaultStorage,
+  }
+
+  return (
+    <BitcoinContext.Provider value={value}>
+      {children}
+    </BitcoinContext.Provider>
+  )
+}
+```
+
+### 12. src/App.jsx
 
 ```jsx
 import React from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
-import { useSelector } from 'react-redux'
 import { motion, AnimatePresence } from 'framer-motion'
+import { BitcoinProvider } from './context/BitcoinContext'
+import { VaultProvider } from './context/VaultContext'
 
 // Layout components
 import Header from './components/Layout/Header'
@@ -477,1317 +1222,747 @@ import Sidebar from './components/Layout/Sidebar'
 
 // Page components
 import Overview from './components/Dashboard/Overview'
-import TransactionList from './components/Transactions/TransactionList'
-import KeyList from './components/KeyManagement/KeyList'
-import LimitsList from './components/SpendingLimits/LimitsList'
-import DelegationRules from './components/Delegation/DelegationRules'
+import WalletManager from './components/Wallet/WalletManager'
+import TransactionHistory from './components/Transactions/TransactionHistory'
+import VaultManager from './components/Vault/VaultManager'
+import Settings from './components/Settings/Settings'
 
-// Auth components
-import Login from './components/Auth/Login'
-import ProtectedRoute from './components/Auth/ProtectedRoute'
+// Auth/Setup components
+import Setup from './components/Setup/Setup'
+import { useLocalStorage } from './hooks/useLocalStorage'
 
 function App() {
-  const { isAuthenticated } = useSelector((state) => state.auth)
+  const [isSetup, setIsSetup] = useLocalStorage('doko-setup-complete', false)
 
-  if (!isAuthenticated) {
-    return <Login />
+  if (!isSetup) {
+    return <Setup onComplete={() => setIsSetup(true)} />
   }
 
   return (
-    <div className="min-h-screen bg-light">
-      <Header />
-      <div className="container mx-auto px-4">
-        <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-8 mt-8">
-          <Sidebar />
-          <main className="min-h-[calc(100vh-120px)]">
-            <AnimatePresence mode="wait">
-              <Routes>
-                <Route path="/" element={<Navigate to="/overview" replace />} />
-                <Route
-                  path="/overview"
-                  element={
-                    <ProtectedRoute>
-                      <Overview />
-                    </ProtectedRoute>
-                  }
-                />
-                <Route
-                  path="/transactions"
-                  element={
-                    <ProtectedRoute>
-                      <TransactionList />
-                    </ProtectedRoute>
-                  }
-                />
-                <Route
-                  path="/keys"
-                  element={
-                    <ProtectedRoute>
-                      <KeyList />
-                    </ProtectedRoute>
-                  }
-                />
-                <Route
-                  path="/limits"
-                  element={
-                    <ProtectedRoute>
-                      <LimitsList />
-                    </ProtectedRoute>
-                  }
-                />
-                <Route
-                  path="/delegation"
-                  element={
-                    <ProtectedRoute>
-                      <DelegationRules />
-                    </ProtectedRoute>
-                  }
-                />
-              </Routes>
-            </AnimatePresence>
-          </main>
+    <BitcoinProvider>
+      <VaultProvider>
+        <div className="min-h-screen bg-light">
+          <Header />
+          <div className="container mx-auto px-4">
+            <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-8 mt-8">
+              <Sidebar />
+              <main className="min-h-[calc(100vh-120px)]">
+                <AnimatePresence mode="wait">
+                  <Routes>
+                    <Route path="/" element={<Navigate to="/overview" replace />} />
+                    <Route path="/overview" element={<Overview />} />
+                    <Route path="/wallet" element={<WalletManager />} />
+                    <Route path="/transactions" element={<TransactionHistory />} />
+                    <Route path="/vaults" element={<VaultManager />} />
+                    <Route path="/settings" element={<Settings />} />
+                  </Routes>
+                </AnimatePresence>
+              </main>
+            </div>
+          </div>
         </div>
-      </div>
-    </div>
+      </VaultProvider>
+    </BitcoinProvider>
   )
 }
 
 export default App
 ```
 
-### 9. src/components/Layout/Header.jsx
+### 13. src/main.jsx
 
 ```jsx
 import React from 'react'
-import { useNavigate } from 'react-router-dom'
-import { useDispatch, useSelector } from 'react-redux'
-import { motion } from 'framer-motion'
-import Button from '../UI/Button'
-import { logout } from '../../store/authSlice'
-
-const Header = () => {
-  const navigate = useNavigate()
-  const dispatch = useDispatch()
-  const { user } = useSelector((state) => state.auth)
-
-  const handleLogout = () => {
-    dispatch(logout())
-    navigate('/login')
-  }
-
-  return (
-    <header className="bg-dark text-light border-b-8 border-primary">
-      <div className="container mx-auto px-4">
-        <div className="flex items-center justify-between h-20">
-          <motion.div
-            initial={{ opacity: 0, x: -20 }}
-            animate={{ opacity: 1, x: 0 }}
-            className="flex items-center gap-4"
-          >
-            <div className="w-12 h-12 bg-primary rotate-45 flex items-center justify-center brutal-border">
-              <span className="-rotate-45 text-2xl font-bold">₿</span>
-            </div>
-            <h1 className="text-4xl font-bold uppercase tracking-tighter">
-              DOKO
-            </h1>
-          </motion.div>
-
-          <nav className="flex items-center gap-8">
-            <a
-              href="#"
-              className="text-light hover:text-primary transition-colors font-semibold uppercase"
-            >
-              Dashboard
-            </a>
-            <a
-              href="#"
-              className="text-light hover:text-primary transition-colors font-semibold uppercase"
-            >
-              Analytics
-            </a>
-            <a
-              href="#"
-              className="text-light hover:text-primary transition-colors font-semibold uppercase"
-            >
-              Settings
-            </a>
-            <div className="flex items-center gap-4 ml-8">
-              <span className="text-sm opacity-80">{user?.email}</span>
-              <Button variant="primary" size="sm" onClick={handleLogout}>
-                Disconnect
-              </Button>
-            </div>
-          </nav>
-        </div>
-      </div>
-    </header>
-  )
-}
-
-export default Header
-```
-
-### 10. src/components/Layout/Sidebar.jsx
-
-```jsx
-import React from 'react'
-import { NavLink } from 'react-router-dom'
-import { motion } from 'framer-motion'
-import { useSelector } from 'react-redux'
-
-const menuItems = [
-  {
-    path: '/overview',
-    label: 'Overview',
-    icon: '📊',
-  },
-  {
-    path: '/transactions',
-    label: 'Transactions',
-    icon: '💸',
-  },
-  {
-    path: '/keys',
-    label: 'Key Management',
-    icon: '🔑',
-  },
-  {
-    path: '/limits',
-    label: 'Spending Limits',
-    icon: '⚡',
-  },
-  {
-    path: '/delegation',
-    label: 'Delegation',
-    icon: '👥',
-  },
-]
-
-const Sidebar = () => {
-  const { activeVault } = useSelector((state) => state.vault)
-
-  return (
-    <motion.aside
-      initial={{ x: -100, opacity: 0 }}
-      animate={{ x: 0, opacity: 1 }}
-      className="brutal-panel sticky top-8 h-fit"
-    >
-      <div className="mb-8">
-        <select className="brutal-input w-full font-semibold">
-          <option>Enterprise Vault #1</option>
-          <option>Treasury Vault</option>
-          <option>Operations Vault</option>
-        </select>
-      </div>
-
-      <nav className="flex flex-col gap-3">
-        {menuItems.map((item) => (
-          <NavLink
-            key={item.path}
-            to={item.path}
-            className={({ isActive }) =>
-              `brutal-border p-4 flex items-center gap-3 font-semibold uppercase transition-all duration-200 ${
-                isActive
-                  ? 'bg-dark text-light'
-                  : 'bg-light hover:bg-primary hover:-translate-x-1 hover:-translate-y-1 hover:shadow-brutal-sm'
-              }`
-            }
-          >
-            <span className="text-2xl">{item.icon}</span>
-            {item.label}
-          </NavLink>
-        ))}
-      </nav>
-
-      <div className="mt-8 p-4 brutal-border bg-gray-100">
-        <h3 className="font-bold text-sm uppercase mb-2">Vault Status</h3>
-        <div className="flex items-center gap-2">
-          <div className="status-dot-active"></div>
-          <span className="text-sm">Secured</span>
-        </div>
-      </div>
-    </motion.aside>
-  )
-}
-
-export default Sidebar
-```
-
-### 11. src/components/Dashboard/Overview.jsx
-
-```jsx
-import React, { useEffect } from 'react'
-import { useDispatch, useSelector } from 'react-redux'
-import { motion } from 'framer-motion'
-import StatsCard from './StatsCard'
-import TransactionItem from '../Transactions/TransactionItem'
-import Button from '../UI/Button'
-import { fetchVaultStats } from '../../store/vaultSlice'
-import { fetchRecentTransactions } from '../../store/transactionSlice'
-
-const Overview = () => {
-  const dispatch = useDispatch()
-  const { stats, loading } = useSelector((state) => state.vault)
-  const { recentTransactions } = useSelector((state) => state.transaction)
-
-  useEffect(() => {
-    dispatch(fetchVaultStats())
-    dispatch(fetchRecentTransactions())
-  }, [dispatch])
-
-  const statsData = [
-    {
-      label: 'Total Balance',
-      value: stats?.totalBalance || '0.00',
-      unit: 'BTC',
-      change: '+5.2%',
-      changeType: 'positive',
-      color: 'primary',
-    },
-    {
-      label: 'Active Vaults',
-      value: stats?.activeVaults || '0',
-      unit: '',
-      change: '3 Pending',
-      color: 'secondary',
-    },
-    {
-      label: 'Key Holders',
-      value: stats?.keyHolders || '0',
-      unit: '',
-      change: '5 Online',
-      color: 'tertiary',
-    },
-    {
-      label: 'Daily Volume',
-      value: stats?.dailyVolume || '0.00',
-      unit: 'BTC',
-      change: '-12.5%',
-      changeType: 'negative',
-      color: 'light',
-    },
-  ]
-
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -20 }}
-      className="space-y-8"
-    >
-      {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        {statsData.map((stat, index) => (
-          <StatsCard key={index} {...stat} index={index} />
-        ))}
-      </div>
-
-      {/* Recent Activity */}
-      <div className="brutal-panel">
-        <div className="flex items-center justify-between mb-6 pb-4 border-b-4 border-dark">
-          <h2 className="text-2xl font-bold uppercase">Recent Activity</h2>
-          <Button variant="primary" onClick={() => {}}>
-            New Transaction
-          </Button>
-        </div>
-
-        <div className="space-y-4">
-          {recentTransactions.map((tx) => (
-            <TransactionItem key={tx.id} transaction={tx} />
-          ))}
-        </div>
-      </div>
-    </motion.div>
-  )
-}
-
-export default Overview
-```
-
-### 12. src/components/Dashboard/StatsCard.jsx
-
-```jsx
-import React, { useEffect, useState } from 'react'
-import { motion } from 'framer-motion'
-
-const StatsCard = ({ label, value, unit, change, changeType, color, index }) => {
-  const [displayValue, setDisplayValue] = useState(0)
-  
-  useEffect(() => {
-    const numericValue = parseFloat(value)
-    if (!isNaN(numericValue)) {
-      const duration = 1000
-      const steps = 30
-      const increment = numericValue / steps
-      let current = 0
-      
-      const timer = setInterval(() => {
-        current += increment
-        if (current >= numericValue) {
-          setDisplayValue(value)
-          clearInterval(timer)
-        } else {
-          setDisplayValue(current.toFixed(2))
-        }
-      }, duration / steps)
-      
-      return () => clearInterval(timer)
-    } else {
-      setDisplayValue(value)
-    }
-  }, [value])
-
-  const bgColors = {
-    primary: 'bg-primary',
-    secondary: 'bg-secondary',
-    tertiary: 'bg-tertiary',
-    light: 'bg-light',
-  }
-
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: index * 0.1 }}
-      className={`brutal-card ${bgColors[color]} relative overflow-hidden`}
-    >
-      <div className="relative z-10">
-        <p className="text-sm font-semibold uppercase opacity-80 mb-2">
-          {label}
-        </p>
-        <p className="text-3xl font-bold mb-1">
-          {displayValue} {unit}
-        </p>
-        <p
-          className={`text-sm font-semibold ${
-            changeType === 'positive'
-              ? 'text-success'
-              : changeType === 'negative'
-              ? 'text-danger'
-              : ''
-          }`}
-        >
-          {change}
-        </p>
-      </div>
-      
-      <motion.div
-        className="absolute -right-8 -bottom-8 w-32 h-32 bg-dark opacity-10 rotate-45"
-        animate={{ rotate: 405 }}
-        transition={{ duration: 20, repeat: Infinity, ease: 'linear' }}
-      />
-    </motion.div>
-  )
-}
-
-export default StatsCard
-```
-
-### 13. src/components/UI/Button.jsx
-
-```jsx
-import React from 'react'
-import { motion } from 'framer-motion'
-
-const Button = ({
-  children,
-  variant = 'default',
-  size = 'md',
-  onClick,
-  disabled = false,
-  loading = false,
-  className = '',
-  ...props
-}) => {
-  const variants = {
-    default: 'brutal-btn',
-    primary: 'brutal-btn-primary',
-    secondary: 'brutal-btn-secondary',
-    danger: 'brutal-btn-danger',
-    success: 'brutal-btn-success',
-  }
-
-  const sizes = {
-    sm: 'px-4 py-2 text-sm',
-    md: 'px-6 py-3 text-base',
-    lg: 'px-8 py-4 text-lg',
-  }
-
-  return (
-    <motion.button
-      whileHover={{ scale: 1.02 }}
-      whileTap={{ scale: 0.98 }}
-      className={`${variants[variant]} ${sizes[size]} ${className} ${
-        disabled || loading ? 'opacity-50 cursor-not-allowed' : ''
-      }`}
-      onClick={onClick}
-      disabled={disabled || loading}
-      {...props}
-    >
-      {loading ? (
-        <div className="flex items-center gap-2">
-          <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
-          Loading...
-        </div>
-      ) : (
-        children
-      )}
-    </motion.button>
-  )
-}
-
-export default Button
-```
-
-### 14. src/store/index.js
-
-```javascript
-import { configureStore } from '@reduxjs/toolkit'
-import authReducer from './authSlice'
-import vaultReducer from './vaultSlice'
-import transactionReducer from './transactionSlice'
-
-export const store = configureStore({
-  reducer: {
-    auth: authReducer,
-    vault: vaultReducer,
-    transaction: transactionReducer,
-  },
-})
-```
-
-### 15. src/store/vaultSlice.js
-
-```javascript
-import { createSlice, createAsyncThunk } from '@reduxjs/toolkit'
-import { api } from '../services/api'
-
-export const fetchVaultStats = createAsyncThunk(
-  'vault/fetchStats',
-  async () => {
-    const response = await api.get('/vault/stats')
-    return response.data
-  }
-)
-
-const vaultSlice = createSlice({
-  name: 'vault',
-  initialState: {
-    activeVault: null,
-    vaults: [],
-    stats: {
-      totalBalance: '142.57',
-      activeVaults: '7',
-      keyHolders: '12',
-      dailyVolume: '8.34',
-    },
-    loading: false,
-    error: null,
-  },
-  reducers: {
-    setActiveVault: (state, action) => {
-      state.activeVault = action.payload
-    },
-    updateStats: (state, action) => {
-      state.stats = { ...state.stats, ...action.payload }
-    },
-  },
-  extraReducers: (builder) => {
-    builder
-      .addCase(fetchVaultStats.pending, (state) => {
-        state.loading = true
-      })
-      .addCase(fetchVaultStats.fulfilled, (state, action) => {
-        state.loading = false
-        state.stats = action.payload
-      })
-      .addCase(fetchVaultStats.rejected, (state, action) => {
-        state.loading = false
-        state.error = action.error.message
-      })
-  },
-})
-
-export const { setActiveVault, updateStats } = vaultSlice.actions
-export default vaultSlice.reducer
-```
-
-### 16. src/store/transactionSlice.js
-
-```javascript
-import { createSlice, createAsyncThunk } from '@reduxjs/toolkit'
-import { api } from '../services/api'
-
-export const fetchRecentTransactions = createAsyncThunk(
-  'transaction/fetchRecent',
-  async () => {
-    const response = await api.get('/transactions/recent')
-    return response.data
-  }
-)
-
-export const createTransaction = createAsyncThunk(
-  'transaction/create',
-  async (transactionData) => {
-    const response = await api.post('/transactions', transactionData)
-    return response.data
-  }
-)
-
-const transactionSlice = createSlice({
-  name: 'transaction',
-  initialState: {
-    recentTransactions: [
-      {
-        id: '1',
-        type: 'send',
-        description: 'Sent to Operations',
-        details: 'Multi-sig approval completed',
-        amount: '-2.45',
-        status: 'completed',
-        timestamp: new Date().toISOString(),
-      },
-      {
-        id: '2',
-        type: 'receive',
-        description: 'Received from Mining Pool',
-        details: 'Auto-sweep enabled',
-        amount: '+5.82',
-        status: 'completed',
-        timestamp: new Date().toISOString(),
-      },
-    ],
-    allTransactions: [],
-    loading: false,
-    error: null,
-  },
-  reducers: {
-    addTransaction: (state, action) => {
-      state.recentTransactions.unshift(action.payload)
-      state.allTransactions.unshift(action.payload)
-    },
-    updateTransactionStatus: (state, action) => {
-      const { id, status } = action.payload
-      const transaction = state.allTransactions.find((tx) => tx.id === id)
-      if (transaction) {
-        transaction.status = status
-      }
-    },
-  },
-  extraReducers: (builder) => {
-    builder
-      .addCase(fetchRecentTransactions.fulfilled, (state, action) => {
-        state.recentTransactions = action.payload
-      })
-      .addCase(createTransaction.fulfilled, (state, action) => {
-        state.recentTransactions.unshift(action.payload)
-        state.allTransactions.unshift(action.payload)
-      })
-  },
-})
-
-export const { addTransaction, updateTransactionStatus } = transactionSlice.actions
-export default transactionSlice.reducer
-```
-
-### 17. src/store/authSlice.js
-
-```javascript
-import { createSlice, createAsyncThunk } from '@reduxjs/toolkit'
-import { api, setAuthToken } from '../services/api'
-import { storage } from '../services/storage'
-
-export const login = createAsyncThunk('auth/login', async (credentials) => {
-  const response = await api.post('/auth/login', credentials)
-  const { token, user } = response.data
-  setAuthToken(token)
-  storage.set('authToken', token)
-  storage.set('user', user)
-  return { token, user }
-})
-
-export const logout = createAsyncThunk('auth/logout', async () => {
-  await api.post('/auth/logout')
-  setAuthToken(null)
-  storage.remove('authToken')
-  storage.remove('user')
-})
-
-const authSlice = createSlice({
-  name: 'auth',
-  initialState: {
-    user: storage.get('user'),
-    token: storage.get('authToken'),
-    isAuthenticated: !!storage.get('authToken'),
-    loading: false,
-    error: null,
-  },
-  reducers: {
-    clearError: (state) => {
-      state.error = null
-    },
-  },
-  extraReducers: (builder) => {
-    builder
-      .addCase(login.pending, (state) => {
-        state.loading = true
-        state.error = null
-      })
-      .addCase(login.fulfilled, (state, action) => {
-        state.loading = false
-        state.user = action.payload.user
-        state.token = action.payload.token
-        state.isAuthenticated = true
-      })
-      .addCase(login.rejected, (state, action) => {
-        state.loading = false
-        state.error = action.error.message
-      })
-      .addCase(logout.fulfilled, (state) => {
-        state.user = null
-        state.token = null
-        state.isAuthenticated = false
-      })
-  },
-})
-
-export const { clearError } = authSlice.actions
-export default authSlice.reducer
-```
-
-### 18. src/services/api.js
-
-```javascript
-import axios from 'axios'
-import { storage } from './storage'
-
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080/api'
-
-export const api = axios.create({
-  baseURL: API_URL,
-  headers: {
-    'Content-Type': 'application/json',
-  },
-})
-
-// Request interceptor
-api.interceptors.request.use(
-  (config) => {
-    const token = storage.get('authToken')
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`
-    }
-    return config
-  },
-  (error) => {
-    return Promise.reject(error)
-  }
-)
-
-// Response interceptor
-api.interceptors.response.use(
-  (response) => response,
-  (error) => {
-    if (error.response?.status === 401) {
-      storage.remove('authToken')
-      storage.remove('user')
-      window.location.href = '/login'
-    }
-    return Promise.reject(error)
-  }
-)
-
-export const setAuthToken = (token) => {
-  if (token) {
-    api.defaults.headers.common['Authorization'] = `Bearer ${token}`
-  } else {
-    delete api.defaults.headers.common['Authorization']
-  }
-}
-
-// Mock API endpoints for development
-if (import.meta.env.DEV) {
-  // Mock implementation
-  api.get = async (url) => {
-    await new Promise((resolve) => setTimeout(resolve, 500))
-    
-    if (url === '/vault/stats') {
-      return {
-        data: {
-          totalBalance: '142.57',
-          activeVaults: '7',
-          keyHolders: '12',
-          dailyVolume: '8.34',
-        },
-      }
-    }
-    
-    if (url === '/transactions/recent') {
-      return {
-        data: [
-          {
-            id: '1',
-            type: 'send',
-            description: 'Sent to Operations',
-            details: 'Multi-sig approval completed',
-            amount: '-2.45',
-            status: 'completed',
-            timestamp: new Date().toISOString(),
-          },
-          {
-            id: '2',
-            type: 'receive',
-            description: 'Received from Mining Pool',
-            details: 'Auto-sweep enabled',
-            amount: '+5.82',
-            status: 'completed',
-            timestamp: new Date().toISOString(),
-          },
-        ],
-      }
-    }
-    
-    return { data: {} }
-  }
-  
-  api.post = async (url, data) => {
-    await new Promise((resolve) => setTimeout(resolve, 500))
-    
-    if (url === '/auth/login') {
-      return {
-        data: {
-          token: 'mock-jwt-token',
-          user: {
-            id: '1',
-            email: data.email,
-            role: 'admin',
-          },
-        },
-      }
-    }
-    
-    return { data: { ...data, id: Date.now().toString() } }
-  }
-}
-```
-
-### 19. src/services/bitcoin.js
-
-```javascript
-import * as bitcoin from 'bitcoinjs-lib'
-import * as secp256k1 from '@noble/secp256k1'
-import * as bip39 from 'bip39'
+import ReactDOM from 'react-dom/client'
+import { BrowserRouter } from 'react-router-dom'
+import { Toaster } from 'react-hot-toast'
+import App from './App'
+import './index.css'
+
+// Polyfills
 import { Buffer } from 'buffer'
-
-// Polyfill for browser
 window.Buffer = Buffer
 
-const NETWORK = import.meta.env.VITE_BITCOIN_NETWORK === 'mainnet' 
-  ? bitcoin.networks.bitcoin 
-  : bitcoin.networks.testnet
-
-export class BitcoinService {
-  static generateMnemonic() {
-    return bip39.generateMnemonic(256)
-  }
-
-  static async mnemonicToSeed(mnemonic) {
-    return await bip39.mnemonicToSeed(mnemonic)
-  }
-
-  static createKeyPair(seed) {
-    const root = bitcoin.bip32.fromSeed(seed, NETWORK)
-    const path = "m/84'/0'/0'/0/0" // BIP84 for native segwit
-    const child = root.derivePath(path)
-    
-    return {
-      privateKey: child.privateKey,
-      publicKey: child.publicKey,
-      address: bitcoin.payments.p2wpkh({ 
-        pubkey: child.publicKey, 
-        network: NETWORK 
-      }).address,
-    }
-  }
-
-  static createMultisigAddress(publicKeys, m) {
-    const pubkeys = publicKeys.map(hex => Buffer.from(hex, 'hex'))
-    const p2ms = bitcoin.payments.p2ms({ 
-      m, 
-      pubkeys, 
-      network: NETWORK 
-    })
-    const p2wsh = bitcoin.payments.p2wsh({ 
-      redeem: p2ms, 
-      network: NETWORK 
-    })
-    
-    return {
-      address: p2wsh.address,
-      redeemScript: p2ms.output,
-      witnessScript: p2wsh.redeem.output,
-    }
-  }
-
-  static async signTransaction(psbt, privateKey) {
-    const keyPair = bitcoin.ECPair.fromPrivateKey(privateKey, { network: NETWORK })
-    psbt.signAllInputs(keyPair)
-    return psbt
-  }
-
-  static validateAddress(address) {
-    try {
-      bitcoin.address.toOutputScript(address, NETWORK)
-      return true
-    } catch {
-      return false
-    }
-  }
-
-  static estimateFee(inputs, outputs, feeRate = 10) {
-    // Rough estimation: 10 bytes per input + 34 bytes per output + 10 bytes overhead
-    const size = inputs * 148 + outputs * 34 + 10
-    return Math.ceil(size * feeRate)
-  }
-}
-
-export default BitcoinService
-```
-
-### 20. src/services/storage.js
-
-```javascript
-class SecureStorage {
-  constructor() {
-    this.storage = window.localStorage
-    this.prefix = 'doko_'
-  }
-
-  set(key, value) {
-    try {
-      const serializedValue = JSON.stringify(value)
-      // In production, encrypt the value here
-      this.storage.setItem(this.prefix + key, serializedValue)
-      return true
-    } catch (error) {
-      console.error('Storage error:', error)
-      return false
-    }
-  }
-
-  get(key) {
-    try {
-      const item = this.storage.getItem(this.prefix + key)
-      if (!item) return null
-      // In production, decrypt the value here
-      return JSON.parse(item)
-    } catch (error) {
-      console.error('Storage error:', error)
-      return null
-    }
-  }
-
-  remove(key) {
-    try {
-      this.storage.removeItem(this.prefix + key)
-      return true
-    } catch (error) {
-      console.error('Storage error:', error)
-      return false
-    }
-  }
-
-  clear() {
-    try {
-      Object.keys(this.storage)
-        .filter(key => key.startsWith(this.prefix))
-        .forEach(key => this.storage.removeItem(key))
-      return true
-    } catch (error) {
-      console.error('Storage error:', error)
-      return false
-    }
-  }
-}
-
-export const storage = new SecureStorage()
-```
-
-### 21. src/utils/constants.js
-
-```javascript
-export const BITCOIN_DECIMALS = 8
-
-export const TRANSACTION_STATUS = {
-  PENDING: 'pending',
-  CONFIRMING: 'confirming',
-  COMPLETED: 'completed',
-  FAILED: 'failed',
-  CANCELLED: 'cancelled',
-}
-
-export const KEY_TYPES = {
-  MASTER: 'master',
-  SIGNING: 'signing',
-  VIEW_ONLY: 'view_only',
-  EMERGENCY: 'emergency',
-}
-
-export const VAULT_TYPES = {
-  STANDARD: 'standard',
-  MULTISIG: 'multisig',
-  TIMELOCKED: 'timelocked',
-}
-
-export const PERMISSIONS = {
-  CREATE_TRANSACTION: 'create_transaction',
-  APPROVE_TRANSACTION: 'approve_transaction',
-  MANAGE_KEYS: 'manage_keys',
-  CONFIGURE_LIMITS: 'configure_limits',
-  VIEW_ONLY: 'view_only',
-}
-
-export const FEE_PRIORITIES = {
-  HIGH: { label: 'High (10 min)', blocks: 1, satPerByte: 50 },
-  MEDIUM: { label: 'Medium (30 min)', blocks: 3, satPerByte: 20 },
-  LOW: { label: 'Low (1 hour)', blocks: 6, satPerByte: 10 },
-}
-
-export const SPENDING_LIMIT_TYPES = {
-  DAILY: 'daily',
-  WEEKLY: 'weekly',
-  MONTHLY: 'monthly',
-  PER_TRANSACTION: 'per_transaction',
-}
-```
-
-### 22. src/utils/formatters.js
-
-```javascript
-import { format, formatDistance, formatRelative } from 'date-fns'
-
-export const formatBTC = (satoshis, showUnit = true) => {
-  const btc = satoshis / 100000000
-  const formatted = btc.toFixed(8).replace(/\.?0+$/, '')
-  return showUnit ? `${formatted} BTC` : formatted
-}
-
-export const formatSatoshis = (satoshis) => {
-  return new Intl.NumberFormat('en-US').format(satoshis) + ' sats'
-}
-
-export const formatUSD = (amount) => {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-  }).format(amount)
-}
-
-export const formatAddress = (address, length = 8) => {
-  if (!address) return ''
-  return `${address.slice(0, length)}...${address.slice(-length)}`
-}
-
-export const formatTxId = (txId, length = 6) => {
-  if (!txId) return ''
-  return `${txId.slice(0, length)}...${txId.slice(-length)}`
-}
-
-export const formatDate = (date) => {
-  return format(new Date(date), 'MMM dd, yyyy HH:mm')
-}
-
-export const formatRelativeTime = (date) => {
-  return formatDistance(new Date(date), new Date(), { addSuffix: true })
-}
-
-export const formatPercentage = (value, decimals = 2) => {
-  return `${value.toFixed(decimals)}%`
-}
-```
-
-### 23. src/utils/validators.js
-
-```javascript
-import { validateAddress } from '../services/bitcoin'
-
-export const validateBitcoinAddress = (address) => {
-  if (!address) {
-    return 'Address is required'
-  }
-  
-  if (!validateAddress(address)) {
-    return 'Invalid Bitcoin address'
-  }
-  
-  return null
-}
-
-export const validateAmount = (amount, max = null) => {
-  if (!amount || amount <= 0) {
-    return 'Amount must be greater than 0'
-  }
-  
-  if (amount < 0.00000001) {
-    return 'Amount must be at least 1 satoshi'
-  }
-  
-  if (max && amount > max) {
-    return `Amount cannot exceed ${max} BTC`
-  }
-  
-  return null
-}
-
-export const validateEmail = (email) => {
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-  
-  if (!email) {
-    return 'Email is required'
-  }
-  
-  if (!emailRegex.test(email)) {
-    return 'Invalid email address'
-  }
-  
-  return null
-}
-
-export const validatePassword = (password) => {
-  if (!password) {
-    return 'Password is required'
-  }
-  
-  if (password.length < 8) {
-    return 'Password must be at least 8 characters'
-  }
-  
-  if (!/[A-Z]/.test(password)) {
-    return 'Password must contain at least one uppercase letter'
-  }
-  
-  if (!/[a-z]/.test(password)) {
-    return 'Password must contain at least one lowercase letter'
-  }
-  
-  if (!/[0-9]/.test(password)) {
-    return 'Password must contain at least one number'
-  }
-  
-  return null
-}
-
-export const validateMnemonic = (mnemonic) => {
-  if (!mnemonic) {
-    return 'Mnemonic is required'
-  }
-  
-  const words = mnemonic.trim().split(/\s+/)
-  
-  if (words.length !== 12 && words.length !== 24) {
-    return 'Mnemonic must be 12 or 24 words'
-  }
-  
-  return null
-}
+ReactDOM.createRoot(document.getElementById('root')).render(
+  <React.StrictMode>
+    <BrowserRouter>
+      <App />
+      <Toaster
+        position="top-right"
+        toastOptions={{
+          style: {
+            border: '3px solid #000',
+            padding: '16px',
+            background: '#fff',
+            color: '#000',
+            fontFamily: 'Space Grotesk, monospace',
+            fontWeight: 600,
+            boxShadow: '4px 4px 0px rgba(0,0,0,1)',
+          },
+          success: {
+            style: {
+              background: '#00FF88',
+            },
+          },
+          error: {
+            style: {
+              background: '#FF0066',
+              color: '#fff',
+            },
+          },
+        }}
+      />
+    </BrowserRouter>
+  </React.StrictMode>
+)
 ```
 
 ## Development Instructions
 
-### 1. Clone and Setup
+### 1. Setup Development Environment
 
 ```bash
-# Create project from this guide
-mkdir doko-bitcoin-vault
-cd doko-bitcoin-vault
-
-# Initialize git
-git init
-git add .
-git commit -m "Initial commit"
+# Navigate to app directory
+cd doko/app
 
 # Install dependencies
 npm install
 
-# Copy environment variables
+# Copy environment file
 cp .env.example .env
+
+# Edit .env with your Bitcoin RPC or API settings
 ```
 
-### 2. Start Development Server
+### 2. Configure Bitcoin Connection
+
+For development, you have two options:
+
+#### Option A: Use Public APIs (Recommended for testing)
+```env
+VITE_USE_PUBLIC_API=true
+VITE_BITCOIN_NETWORK=testnet
+```
+
+#### Option B: Connect to Bitcoin Core
+```env
+VITE_USE_PUBLIC_API=false
+VITE_BITCOIN_RPC_URL=http://localhost:8332
+VITE_BITCOIN_RPC_USER=your_username
+VITE_BITCOIN_RPC_PASS=your_password
+```
+
+### 3. Start Development Server
 
 ```bash
 npm run dev
 ```
 
-The application will open at http://localhost:3000
-
-### 3. Development Workflow
-
-1. **Component Development**: Create components in the appropriate directories
-2. **State Management**: Use Redux Toolkit for global state
-3. **Styling**: Use Tailwind CSS with the brutal-* utility classes
-4. **API Integration**: Update the mock API in development, replace with real endpoints in production
+The app will open at http://localhost:3000
 
 ## Production Build
 
-### 1. Build for Production
-
 ```bash
+# Build for production
 npm run build
-```
 
-### 2. Preview Production Build
-
-```bash
+# Preview production build
 npm run preview
 ```
 
-### 3. Build Output
+## Key Features
 
-The production build will be in the `dist` directory:
+### 1. **Pure Frontend Architecture**
+- No backend required
+- All data stored in browser (IndexedDB)
+- Direct connection to Bitcoin network via RPC or public APIs
 
-```
-dist/
-├── index.html
-├── assets/
-│   ├── index-[hash].js
-│   ├── index-[hash].css
-│   └── vendor-[hash].js
-```
+### 2. **Wallet Management**
+- HD wallet generation (BIP39/BIP32/BIP84)
+- Mnemonic backup and restore
+- Multiple account support
+- Address generation and management
+
+### 3. **Transaction Building**
+- UTXO selection and management
+- Fee estimation
+- PSBT creation and signing
+- Direct broadcast to network
+
+### 4. **Multisig Vaults**
+- M-of-N multisig creation
+- Partial signature collection
+- PSBT combination
+- Collaborative signing workflows
+
+### 5. **Security**
+- Browser-based encryption
+- No private keys leave the browser
+- Optional password protection
+- Encrypted storage
+
+### 6. **RPC Integration**
+- Bitcoin Core RPC support
+- Public API fallback (Blockstream, Mempool.space)
+- Real-time balance queries
+- Transaction history
+
+## Security Considerations
+
+1. **Browser Security**
+   - Use HTTPS in production
+   - Enable CSP headers
+   - Regular security audits
+
+2. **Key Management**
+   - Keys encrypted at rest
+   - Never transmitted over network
+   - User-controlled backup
+
+3. **Transaction Security**
+   - Client-side validation
+   - Fee protection
+   - Address verification
+
+4. **Data Privacy**
+   - All data local to browser
+   - No tracking or analytics
+   - User-controlled exports
 
 ## Deployment
 
-### Option 1: Vercel
+### Static Hosting (Netlify/Vercel)
 
 ```bash
-# Install Vercel CLI
-npm i -g vercel
+# Build the app
+npm run build
 
-# Deploy
-vercel
-
-# Follow the prompts
+# Deploy dist folder to your hosting service
 ```
 
-### Option 2: Netlify
-
-1. Build the project: `npm run build`
-2. Drag the `dist` folder to Netlify Drop
-3. Configure environment variables in Netlify dashboard
-
-### Option 3: Docker
-
-Create a `Dockerfile`:
-
-```dockerfile
-FROM node:18-alpine as builder
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci
-COPY . .
-RUN npm run build
-
-FROM nginx:alpine
-COPY --from=builder /app/dist /usr/share/nginx/html
-COPY nginx.conf /etc/nginx/nginx.conf
-EXPOSE 80
-CMD ["nginx", "-g", "daemon off;"]
-```
-
-Create `nginx.conf`:
+### Self-Hosted
 
 ```nginx
-events {
-    worker_connections 1024;
-}
-
-http {
-    include /etc/nginx/mime.types;
-    default_type application/octet-stream;
-
-    server {
-        listen 80;
-        server_name localhost;
-        root /usr/share/nginx/html;
-        index index.html;
-
-        location / {
-            try_files $uri $uri/ /index.html;
-        }
-
-        location /api {
-            proxy_pass http://your-api-server:8080;
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-        }
+server {
+    listen 443 ssl http2;
+    server_name your-domain.com;
+    
+    root /var/www/doko/app/dist;
+    index index.html;
+    
+    # SSL configuration
+    ssl_certificate /path/to/cert.pem;
+    ssl_certificate_key /path/to/key.pem;
+    
+    # Security headers
+    add_header X-Frame-Options "SAMEORIGIN";
+    add_header X-Content-Type-Options "nosniff";
+    add_header X-XSS-Protection "1; mode=block";
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';";
+    
+    location / {
+        try_files $uri $uri/ /index.html;
     }
 }
 ```
 
-Build and run:
+## Testing with Bitcoin Testnet
 
-```bash
-docker build -t doko-vault .
-docker run -p 80:80 doko-vault
-```
+1. Get testnet Bitcoin from faucets
+2. Use testnet configuration in .env
+3. All operations safe for testing
+4. No real money at risk
 
-## Security Considerations
+This completes the frontend-only Bitcoin vault system with full RPC integration and browser-based storage! transaction
+  async broadcastTransaction(hexTx) {
+    if (this.usePublicAPI) {
+      try {
+        const response = await this.blockstreamAPI.post('/tx', hexTx, {
+          headers: { 'Content-Type': 'text/plain' },
+        })
+        return response.data
+      } catch (error) {
+        console.error('Error broadcasting transaction:', error)
+        throw error
+      }
+    } else {
+      return await this.call('sendrawtransaction', [hexTx])
+    }
+  }
 
-1. **Environment Variables**: Never commit `.env` files
-2. **API Keys**: Store sensitive keys in environment variables
-3. **HTTPS**: Always use HTTPS in production
-4. **CSP Headers**: Configure Content Security Policy
-5. **Authentication**: Implement proper JWT validation
-6. **Input Validation**: Validate all user inputs
-7. **XSS Protection**: Sanitize user-generated content
-8. **CORS**: Configure CORS properly on the backend
+  // Get current fee estimates
+  async getFeeEstimates() {
+    if (this.usePublicAPI) {
+      try {
+        const response = await this.mempoolAPI.get('/v1/fees/recommended')
+        return {
+          fast: response.data.fastestFee,
+          medium: response.data.halfHourFee,
+          slow: response.data.hourFee,
+          minimum: response.data.minimumFee,
+        }
+      } catch (error) {
+        console.error('Error fetching fee estimates:', error)
+        return {
+          fast: 50,
+          medium: 20,
+          slow: 10,
+          minimum: 1,
+        }
+      }
+    } else {
+      const blocks = [1, 3, 6]
+      const estimates = {}
+      
+      for (const block of blocks) {
+        const estimate = await this.call('estimatesmartfee', [block])
+        estimates[block] = Math.ceil(estimate.feerate * 100000000 / 1000)
+      }
+      
+      return {
+        fast: estimates[1] || 50,
+        medium: estimates[3] || 20,
+        slow: estimates[6] || 10,
+        minimum: 1,
+      }
+    }
+  }
 
-## Backend API Requirements
+  // Get blockchain info
+  async getBlockchainInfo() {
+    if (this.usePublicAPI) {
+      try {
+        const response = await this.blockstreamAPI.get('/blocks/tip/height')
+        return {
+          blocks: parseInt(response.data),
+          network: import.meta.env.VITE_BITCOIN_NETWORK || 'testnet',
+        }
+      } catch (error) {
+        console.error('Error fetching blockchain info:', error)
+        throw error
+      }
+    } else {
+      return await this.call('getblockchaininfo')
+    }
+  }
 
-The frontend expects these API endpoints:
-
-- `POST /api/auth/login`
-- `POST /api/auth/logout`
-- `GET /api/vault/stats`
-- `GET /api/transactions/recent`
-- `POST /api/transactions`
-- `GET /api/keys`
-- `POST /api/keys`
-- `GET /api/limits`
-- `POST /api/limits`
-- `GET /api/delegation/rules`
-- `POST /api/delegation/rules`
-
-## Testing
-
-```bash
-# Install testing dependencies
-npm install -D vitest @testing-library/react @testing-library/jest-dom
-
-# Add test script to package.json
-"scripts": {
-  "test": "vitest",
-  "test:ui": "vitest --ui"
+  // Get address transactions
+  async getAddressTransactions(address, limit = 50) {
+    if (this.usePublicAPI) {
+      try {
+        const response = await this.blockstreamAPI.get(`/address/${address}/txs`)
+        return response.data.slice(0, limit)
+      } catch (error) {
+        console.error('Error fetching transactions:', error)
+        throw error
+      }
+    } else {
+      // Note: This requires an indexed node with address index
+      throw new Error('Address transaction history requires indexed node')
+    }
+  }
 }
 
-# Run tests
-npm test
+export default BitcoinRPC
 ```
 
-## Performance Optimization
+### 6. src/lib/bitcoin/wallet.js
 
-1. **Code Splitting**: Already configured with Vite
-2. **Lazy Loading**: Implement React.lazy for routes
-3. **Image Optimization**: Use WebP format
-4. **Bundle Analysis**: `npm run build -- --analyze`
-5. **Caching**: Configure service workers
-6. **CDN**: Serve static assets from CDN
+```javascript
+import * as bitcoin from 'bitcoinjs-lib'
+import * as bip39 from 'bip39'
+import BIP32Factory from 'bip32'
+import * as ecc from '@noble/secp256k1'
+import { Buffer } from 'buffer'
 
-## Monitoring
+// Initialize BIP32
+const bip32 = BIP32Factory(ecc)
 
-1. **Error Tracking**: Integrate Sentry
-2. **Analytics**: Add Google Analytics or Plausible
-3. **Performance**: Use Web Vitals
-4. **Uptime**: Configure uptime monitoring
+// Set network
+const NETWORK = import.meta.env.VITE_BITCOIN_NETWORK === 'mainnet' 
+  ? bitcoin.networks.bitcoin 
+  : bitcoin.networks.testnet
 
-This completes the full enterprise-grade Bitcoin vault system with all necessary configurations, components, and deployment instructions!
+class BitcoinWallet {
+  constructor(mnemonic = null) {
+    if (mnemonic) {
+      this.mnemonic = mnemonic
+    } else {
+      this.mnemonic = bip39.generateMnemonic(256) // 24 words
+    }
+    
+    this.seed = bip39.mnemonicToSeedSync(this.mnemonic)
+    this.root = bip32.fromSeed(this.seed, NETWORK)
+    this.accounts = new Map()
+  }
+
+  // Derive account (BIP84 - Native SegWit)
+  deriveAccount(accountIndex = 0) {
+    const path = `m/84'/${NETWORK === bitcoin.networks.bitcoin ? 0 : 1}'/${accountIndex}'`
+    const account = this.root.derivePath(path)
+    
+    const accountData = {
+      index: accountIndex,
+      xpub: account.neutered().toBase58(),
+      addresses: new Map(),
+    }
+    
+    this.accounts.set(accountIndex, accountData)
+    return accountData
+  }
+
+  // Generate address for account
+  generateAddress(accountIndex = 0, change = 0, index = 0) {
+    if (!this.accounts.has(accountIndex)) {
+      this.deriveAccount(accountIndex)
+    }
+
+    const path = `m/84'/${NETWORK === bitcoin.networks.bitcoin ? 0 : 1}'/${accountIndex}'/${change}/${index}`
+    const child = this.root.derivePath(path)
+    
+    const { address } = bitcoin.payments.p2wpkh({
+      pubkey: child.publicKey,
+      network: NETWORK,
+    })
+
+    const addressData = {
+      address,
+      path,
+      publicKey: child.publicKey.toString('hex'),
+      privateKey: child.privateKey.toString('hex'),
+      change,
+      index,
+    }
+
+    const account = this.accounts.get(accountIndex)
+    account.addresses.set(address, addressData)
+    
+    return addressData
+  }
+
+  // Get next unused address
+  getNextAddress(accountIndex = 0, change = 0) {
+    const account = this.accounts.get(accountIndex) || this.deriveAccount(accountIndex)
+    let index = 0
+    
+    // Find next unused index
+    for (const [_, addressData] of account.addresses) {
+      if (addressData.change === change && addressData.index >= index) {
+        index = addressData.index + 1
+      }
+    }
+    
+    return this.generateAddress(accountIndex, change, index)
+  }
+
+  // Sign transaction
+  signTransaction(psbt, addressesUsed) {
+    const keyPairs = new Map()
+    
+    // Collect key pairs for addresses used in transaction
+    for (const address of addressesUsed) {
+      for (const account of this.accounts.values()) {
+        const addressData = account.addresses.get(address)
+        if (addressData) {
+          const keyPair = bitcoin.ECPair.fromPrivateKey(
+            Buffer.from(addressData.privateKey, 'hex'),
+            { network: NETWORK }
+          )
+          keyPairs.set(address, keyPair)
+        }
+      }
+    }
+
+    // Sign all inputs
+    psbt.data.inputs.forEach((input, index) => {
+      const address = this.getAddressFromInput(psbt, index)
+      const keyPair = keyPairs.get(address)
+      if (keyPair) {
+        psbt.signInput(index, keyPair)
+      }
+    })
+
+    psbt.finalizeAllInputs()
+    return psbt
+  }
+
+  // Helper to extract address from PSBT input
+  getAddressFromInput(psbt, inputIndex) {
+    const input = psbt.data.inputs[inputIndex]
+    if (input.witnessUtxo) {
+      const script = input.witnessUtxo.script
+      try {
+        const address = bitcoin.address.fromOutputScript(script, NETWORK)
+        return address
+      } catch (e) {
+        console.error('Could not derive address from input', e)
+        return null
+      }
+    }
+    return null
+  }
+
+  // Create backup
+  getBackup() {
+    return {
+      mnemonic: this.mnemonic,
+      accounts: Array.from(this.accounts.entries()).map(([index, account]) => ({
+        index,
+        xpub: account.xpub,
+        addresses: Array.from(account.addresses.values()).map(addr => ({
+          address: addr.address,
+          path: addr.path,
+          change: addr.change,
+          index: addr.index,
+        })),
+      })),
+    }
+  }
+
+  // Restore from backup
+  static fromBackup(backup) {
+    const wallet = new BitcoinWallet(backup.mnemonic)
+    
+    // Restore accounts and addresses
+    for (const accountBackup of backup.accounts) {
+      wallet.deriveAccount(accountBackup.index)
+      
+      for (const addrBackup of accountBackup.addresses) {
+        wallet.generateAddress(
+          accountBackup.index,
+          addrBackup.change,
+          addrBackup.index
+        )
+      }
+    }
+    
+    return wallet
+  }
+
+  // Export xpub for watch-only wallet
+  exportXPub(accountIndex = 0) {
+    const account = this.accounts.get(accountIndex)
+    if (!account) {
+      this.deriveAccount(accountIndex)
+      return this.accounts.get(accountIndex).xpub
+    }
+    return account.xpub
+  }
+
+  // Validate mnemonic
+  static validateMnemonic(mnemonic) {
+    return bip39.validateMnemonic(mnemonic)
+  }
+}
+
+export default BitcoinWallet
+```
+
+### 7. src/lib/bitcoin/transaction.js
+
+```javascript
+import * as bitcoin from 'bitcoinjs-lib'
+import { Buffer } from 'buffer'
+
+const NETWORK = import.meta.env.VITE_BITCOIN_NETWORK === 'mainnet' 
+  ? bitcoin.networks.bitcoin 
+  : bitcoin.networks.testnet
+
+class TransactionBuilder {
+  constructor(rpcClient) {
+    this.rpc = rpcClient
+  }
+
+  // Create a transaction
+  async createTransaction({
+    inputs, // Array of { txid, vout, value, address }
+    outputs, // Array of { address, value }
+    fee,
+    changeAddress,
+  }) {
+    const psbt = new bitcoin.Psbt({ network: NETWORK })
+
+    // Add inputs
+    for (const input of inputs) {
+      const txHex = await this.rpc.getTransaction(input.txid)
+      const tx = bitcoin.Transaction.fromHex(txHex.hex || txHex)
+      
+      psbt.addInput({
+        hash: input.txid,
+        index: input.vout,
+        witnessUtxo: {
+          script: tx.outs[input.vout].script,
+          value: input.value,
+        },
+      })
+    }
+
+    // Add outputs
+    let totalOut = 0
+    for (const output of outputs) {
+      psbt.addOutput({
+        address: output.address,
+        value: output.value,
+      })
+      totalOut += output.value
+    }
+
+    // Calculate change
+    const totalIn = inputs.reduce((sum, input) => sum + input.value, 0)
+    const change = totalIn - totalOut - fee
+
+    // Add change output if above dust limit
+    const dustLimit = parseInt(import.meta.env.VITE_DUST_LIMIT) || 546
+    if (change > dustLimit) {
+      psbt.addOutput({
+        address: changeAddress,
+        value: change,
+      })
+    }
+
+    return psbt
+  }
+
+  // Estimate transaction size
+  estimateTransactionSize(inputCount, outputCount, inputType = 'p2wpkh') {
+    // Base transaction size
+    let size = 10 // version + locktime
+
+    // Input sizes
+    const inputSizes = {
+      p2wpkh: 68, // Native SegWit
+      p2sh_p2wpkh: 91, // Wrapped SegWit
+      p2pkh: 148, // Legacy
+    }
+
+    size += inputCount * (inputSizes[inputType] || inputSizes.p2wpkh)
+
+    // Output size (34 bytes per output)
+    size += outputCount * 34
+
+    // Add some buffer
+    return Math.ceil(size * 1.1)
+  }
+
+  // Calculate optimal fee
+  async calculateFee(inputCount, outputCount, priority = 'medium') {
+    const feeRates = await this.rpc.getFeeEstimates()
+    const size = this.estimateTransactionSize(inputCount, outputCount)
+    
+    const rate = feeRates[priority] || feeRates.medium
+    return Math.ceil(size * rate)
+  }
+
+  // Select UTXOs for transaction (coin selection)
+  selectUTXOs(utxos, targetAmount, feeRate) {
+    // Sort UTXOs by value (largest first)
+    const sortedUTXOs = [...utxos].sort((a, b) => b.value - a.value)
+    
+    const selected = []
+    let totalSelected = 0
+    let estimatedFee = 0
+
+    for (const utxo of sortedUTXOs) {
+      selected.push(utxo)
+      totalSelected += utxo.value
+      
+      // Estimate fee with current selection
+      estimatedFee = this.estimateTransactionSize(selected.length, 2) * feeRate
+      
+      // Check if we have enough
+      if (totalSelected >= targetAmount + estimatedFee) {
+        break
+      }
+    }
+
+    if (totalSelected < targetAmount + estimatedFee) {
+      throw new Error('Insufficient funds')
+    }
+
+    return {
+      utxos: selected,
+      total: totalSelected,
+      fee: estimatedFee,
+      change: totalSelected - targetAmount - estimatedFee,
+    }
+  }
+
+  // Build a simple send transaction
+  async buildSendTransaction({
+    fromAddress,
+    toAddress,
+    amount,
+    feeRate,
+    changeAddress,
+  }) {
+    // Get UTXOs
+    const utxos = await this.rpc.getUTXOs(fromAddress)
+    
+    // Select UTXOs
+    const selection = this.selectUTXOs(utxos, amount, feeRate)
+    
+    // Create transaction
+    const psbt = await this.createTransaction({
+      inputs: selection.utxos.map(utxo => ({
+        txid: utxo.txid,
+        vout: utxo.vout,
+        value: utxo.value,
+        address: fromAddress,
+      })),
+      outputs: [{ address: toAddress, value: amount }],
+      fee: selection.fee,
+      changeAddress: changeAddress || fromAddress,
+    })
+
+    return {
+      psbt,
+      fee: selection.fee,
+      change: selection.change,
+    }
+  }
+
+  // Decode and analyze a transaction
+  decodeTransaction(hexOrBase64) {
+    try {
+      let tx
+      if (hexOrBase64.includes('+') || hexOrBase64.includes('/')) {
+        // Base64 encoded PSBT
+        const psbt = bitcoin.Psbt.fromBase64(hexOrBase64, { network: NETWORK })
+        tx = psbt.extractTransaction()
+      } else {
+        // Hex encoded transaction
+        tx = bitcoin.Transaction.fromHex(hexOrBase64)
+      }
+
+      return {
+        txid: tx.getId(),
+        size: tx.virtualSize(),
+        inputs: tx.ins.map((input, index) => ({
+          index,
+          txid: input.hash.reverse().toString('hex'),
+          vout: input.index,
+          script: input.script.toString('hex'),
+          sequence: input.sequence,
+        })),
+        outputs: tx.outs.map((output, index) => ({
+          index,
+          value: output.value,
+          script: output.script.toString('hex'),
+          address: this.getAddressFromScript(output.script),
+        })),
+      }
+    } catch (error) {
+      throw new Error(`Failed to decode transaction: ${error.message}`)
+    }
+  }
+
+  // Extract address from output script
+  getAddressFromScript(script) {
+    try {
+      return bitcoin.address.fromOutputScript(script, NETWORK)
+    } catch {
+      return 'Unknown'
+    }
+  }
+
+  // Broadcast
