@@ -1178,6 +1178,78 @@ pub async fn run_tui() -> Result<Option<String>> {
         if crossterm::event::poll(timeout)? {
             if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press {
+                    // Handle popup-specific events first (higher priority)
+                    if app.show_delegation_popup {
+                        match key.code {
+                            KeyCode::Tab => {
+                                app.delegation_input_field = match app.delegation_input_field {
+                                    DelegationInputField::Amount => DelegationInputField::Recipient,
+                                    DelegationInputField::Recipient => DelegationInputField::Expiry,
+                                    DelegationInputField::Expiry => DelegationInputField::Amount,
+                                };
+                            }
+                            KeyCode::Enter => {
+                                let create_future = app.create_delegation();
+                                if let Err(e) = create_future.await {
+                                    app.show_popup(format!("Failed to create delegation: {}", e));
+                                }
+                            }
+                            KeyCode::Char(c) => {
+                                match app.delegation_input_field {
+                                    DelegationInputField::Amount => app.delegation_amount_input.push(c),
+                                    DelegationInputField::Recipient => app.delegation_recipient_input.push(c),
+                                    DelegationInputField::Expiry => app.delegation_expiry_input.push(c),
+                                }
+                            }
+                            KeyCode::Backspace => {
+                                match app.delegation_input_field {
+                                    DelegationInputField::Amount => { app.delegation_amount_input.pop(); }
+                                    DelegationInputField::Recipient => { app.delegation_recipient_input.pop(); }
+                                    DelegationInputField::Expiry => { app.delegation_expiry_input.pop(); }
+                                }
+                            }
+                            KeyCode::Esc => {
+                                app.show_delegation_popup = false;
+                            }
+                            _ => {}
+                        }
+                        continue; // Skip main event handling
+                    }
+                    
+                    // Handle role selection popup
+                    if app.show_role_popup {
+                        match key.code {
+                            KeyCode::Char('1') => app.switch_role(Role::CEO),
+                            KeyCode::Char('2') => app.switch_role(Role::Treasurer),
+                            KeyCode::Char('3') => app.switch_role(Role::Operations),
+                            KeyCode::Char('4') => app.switch_role(Role::Auditor),
+                            KeyCode::Esc => {
+                                app.show_role_popup = false;
+                            }
+                            _ => {}
+                        }
+                        continue; // Skip main event handling
+                    }
+                    
+                    // Handle message signing popup
+                    if app.show_message_signer {
+                        match key.code {
+                            KeyCode::Enter => {
+                                if let Err(e) = app.sign_custom_message() {
+                                    app.show_popup(format!("Failed to sign message: {}", e));
+                                }
+                            }
+                            KeyCode::Char(c) => app.message_to_sign.push(c),
+                            KeyCode::Backspace => { app.message_to_sign.pop(); }
+                            KeyCode::Esc => {
+                                app.show_message_signer = false;
+                            }
+                            _ => {}
+                        }
+                        continue; // Skip main event handling
+                    }
+                    
+                    // Main application event handling
                     match key.code {
                         KeyCode::Char('q') => break,
                         KeyCode::Char('c')
@@ -1194,6 +1266,7 @@ pub async fn run_tui() -> Result<Option<String>> {
                         KeyCode::Char('2') => app.current_tab = 1,
                         KeyCode::Char('3') => app.current_tab = 2,
                         KeyCode::Char('4') => app.current_tab = 3,
+                        KeyCode::Char('5') => app.current_tab = 4,
                         KeyCode::Char('r') => {
                             if let Err(e) = app.update_data().await {
                                 app.show_popup(format!("Update failed: {}", e));
@@ -1311,14 +1384,7 @@ pub async fn run_tui() -> Result<Option<String>> {
                             }
                         }
                         KeyCode::Esc | KeyCode::Enter => {
-                            if app.show_delegation_popup || app.show_role_popup || app.show_message_signer {
-                                app.show_delegation_popup = false;
-                                app.show_role_popup = false;
-                                app.show_message_signer = false;
-                                app.show_delegation_execution = false;
-                            } else {
-                                app.hide_popup();
-                            }
+                            app.hide_popup();
                         }
                         // Delegation and role management keys
                         KeyCode::Char('d') => {
@@ -1345,62 +1411,6 @@ pub async fn run_tui() -> Result<Option<String>> {
                                 app.signed_message = None;
                             } else {
                                 app.show_popup("❌ Access Denied: Only Treasurer or CEO can sign messages".to_string());
-                            }
-                        }
-                        // Handle delegation popup inputs
-                        _ if app.show_delegation_popup => {
-                            match key.code {
-                                KeyCode::Tab => {
-                                    app.delegation_input_field = match app.delegation_input_field {
-                                        DelegationInputField::Amount => DelegationInputField::Recipient,
-                                        DelegationInputField::Recipient => DelegationInputField::Expiry,
-                                        DelegationInputField::Expiry => DelegationInputField::Amount,
-                                    };
-                                }
-                                KeyCode::Enter => {
-                                    let create_future = app.create_delegation();
-                                    if let Err(e) = create_future.await {
-                                        app.show_popup(format!("Failed to create delegation: {}", e));
-                                    }
-                                }
-                                KeyCode::Char(c) => {
-                                    match app.delegation_input_field {
-                                        DelegationInputField::Amount => app.delegation_amount_input.push(c),
-                                        DelegationInputField::Recipient => app.delegation_recipient_input.push(c),
-                                        DelegationInputField::Expiry => app.delegation_expiry_input.push(c),
-                                    }
-                                }
-                                KeyCode::Backspace => {
-                                    match app.delegation_input_field {
-                                        DelegationInputField::Amount => { app.delegation_amount_input.pop(); }
-                                        DelegationInputField::Recipient => { app.delegation_recipient_input.pop(); }
-                                        DelegationInputField::Expiry => { app.delegation_expiry_input.pop(); }
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        // Handle role selection popup
-                        _ if app.show_role_popup => {
-                            match key.code {
-                                KeyCode::Char('1') => app.switch_role(Role::CEO),
-                                KeyCode::Char('2') => app.switch_role(Role::Treasurer),
-                                KeyCode::Char('3') => app.switch_role(Role::Operations),
-                                KeyCode::Char('4') => app.switch_role(Role::Auditor),
-                                _ => {}
-                            }
-                        }
-                        // Handle message signing interface
-                        _ if app.show_message_signer => {
-                            match key.code {
-                                KeyCode::Enter => {
-                                    if let Err(e) = app.sign_custom_message() {
-                                        app.show_popup(format!("Failed to sign message: {}", e));
-                                    }
-                                }
-                                KeyCode::Char(c) => app.message_to_sign.push(c),
-                                KeyCode::Backspace => { app.message_to_sign.pop(); }
-                                _ => {}
                             }
                         }
                         // Handle delegation execution
