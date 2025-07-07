@@ -35,7 +35,9 @@
 //! - **Immutable Audit**: All actions recorded on blockchain permanently
 
 use crate::error::{VaultResult};
-use crate::csfs_test::{CsfsTest, OP_CHECKSIGFROMSTACK};
+
+// OP_CHECKSIGFROMSTACK opcode value for Mutinynet
+const OP_CHECKSIGFROMSTACK: u8 = 0xcc;
 use bitcoin::{
     hashes::{sha256, Hash},
     script::Builder,
@@ -84,17 +86,26 @@ pub struct HybridVaultConfig {
 pub struct HybridAdvancedVault {
     /// Vault configuration
     config: HybridVaultConfig,
-    /// CSFS test instance for delegation operations
-    csfs: CsfsTest,
     /// Secp256k1 context for cryptographic operations
     secp: Secp256k1<secp256k1::All>,
 }
 
 impl HybridAdvancedVault {
+    /// Sign a message with the given private key for CSFS delegation
+    fn sign_message(&self, message: &[u8], private_key_hex: &str) -> Result<String> {
+        let private_key_bytes = hex::decode(private_key_hex)?;
+        let secret_key = SecretKey::from_slice(&private_key_bytes)?;
+        let keypair = Keypair::from_secret_key(&self.secp, &secret_key);
+        
+        let message_hash = sha256::Hash::hash(message);
+        let message_obj = Message::from_digest_slice(message_hash.as_byte_array())?;
+        let signature = self.secp.sign_schnorr(&message_obj, &keypair);
+        
+        Ok(hex::encode(signature.as_ref()))
+    }
     /// Create a new hybrid advanced vault
     pub fn new(config: HybridVaultConfig) -> Self {
         Self {
-            csfs: CsfsTest::new(config.network),
             secp: Secp256k1::new(),
             config,
         }
@@ -501,7 +512,7 @@ impl HybridAdvancedVault {
         
         // Create CSFS witness (same pattern as working CSFS implementation)
         let test_message = b"HYBRID VAULT CSFS DEMO";
-        let signature = self.csfs.sign_message(test_message, &self.config.treasurer_privkey)?;
+        let signature = self.sign_message(test_message, &self.config.treasurer_privkey)?;
         let signature_bytes = hex::decode(&signature)?;
         let pubkey_bytes = hex::decode(&self.config.treasurer_pubkey)?;
         let message_hash = sha256::Hash::hash(test_message);
@@ -569,7 +580,7 @@ impl HybridAdvancedVault {
             .ok_or_else(|| anyhow!("Failed to create control block for CSFS path"))?;
 
         // Create delegation signature (treasurer authorizes operations)
-        let delegation_signature = self.csfs.sign_message(
+        let delegation_signature = self.sign_message(
             delegation_message.as_bytes(), 
             &self.config.treasurer_privkey
         ).map_err(|e| anyhow!("Failed to create delegation signature: {:?}", e))?;
