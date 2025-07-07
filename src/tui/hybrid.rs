@@ -1326,26 +1326,36 @@ pub async fn run_tui() -> Result<Option<String>> {
                                 vault_config::DEFAULT_DEMO_AMOUNT,
                                 vault_config::DEFAULT_DEMO_CSV_DELAY
                             ));
-                            let create_future = app.create_vault(
+                            match app.create_vault(
                                 vault_config::DEFAULT_DEMO_AMOUNT,
                                 vault_config::DEFAULT_DEMO_CSV_DELAY,
-                            );
-                            if let Err(e) = create_future.await {
-                                app.show_popup(format!("Failed to create vault: {}", e));
-                                app.log_to_transcript(format!("❌ Vault creation failed: {}", e));
-                            } else {
-                                app.log_to_transcript("✅ Vault created successfully".to_string());
+                            ).await {
+                                Ok(_) => {
+                                    app.log_to_transcript("✅ Vault created successfully".to_string());
+                                    app.show_status_message("✅ Vault created! Press 'f' to fund it.".to_string());
+                                }
+                                Err(e) => {
+                                    let error_msg = format!("❌ Failed to create vault: {}", e);
+                                    app.show_popup(error_msg.clone());
+                                    app.log_to_transcript(error_msg);
+                                    app.show_status_message("❌ Vault creation failed - check popup for details".to_string());
+                                }
                             }
                         }
                         KeyCode::Char('f') => {
                             // Fund vault programmatically
                             app.log_to_transcript("💰 Funding vault via RPC...".to_string());
-                            let fund_future = app.fund_vault();
-                            if let Err(e) = fund_future.await {
-                                app.show_popup(format!("Failed to fund vault: {}", e));
-                                app.log_to_transcript(format!("❌ Vault funding failed: {}", e));
-                            } else {
-                                app.log_to_transcript("✅ Vault funded successfully".to_string());
+                            match app.fund_vault().await {
+                                Ok(_) => {
+                                    app.log_to_transcript("✅ Vault funded successfully".to_string());
+                                    app.show_status_message("✅ Vault funded! Press 't' to trigger or check other operations.".to_string());
+                                }
+                                Err(e) => {
+                                    let error_msg = format!("❌ Failed to fund vault: {}", e);
+                                    app.show_popup(error_msg.clone());
+                                    app.log_to_transcript(error_msg);
+                                    app.show_status_message("❌ Vault funding failed - check popup for details".to_string());
+                                }
                             }
                         }
                         KeyCode::Char('t') => {
@@ -1430,8 +1440,15 @@ pub async fn run_tui() -> Result<Option<String>> {
                                 }
                             }
                         }
-                        KeyCode::Esc | KeyCode::Enter => {
+                        KeyCode::Esc => {
                             app.hide_popup();
+                        }
+                        KeyCode::Enter => {
+                            // Only hide popup if there's actually a popup showing
+                            if app.show_popup || app.show_vault_details {
+                                app.hide_popup();
+                            }
+                            // Note: Delegation and message popups are handled above with 'continue'
                         }
                         // Delegation and role management keys
                         KeyCode::Char('d') => {
