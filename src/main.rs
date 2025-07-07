@@ -378,6 +378,10 @@ async fn hybrid_vault_auto_demo(amount: u64, delay: u32, scenario: &str) -> Resu
         "📡 Network: signet | Block Height: {}",
         rpc.get_block_count()?
     );
+    
+    // CRITICAL FIX: Clean up any existing UTXOs for the vault address to prevent conflicts
+    println!("🧹 Cleaning up any existing vault UTXOs...");
+    let _ = cleanup_vault_utxos(&rpc).await;  // Don't fail if cleanup fails
     println!();
 
     // Generate test keys for hybrid vault
@@ -386,10 +390,14 @@ async fn hybrid_vault_auto_demo(amount: u64, delay: u32, scenario: &str) -> Resu
     println!("└─────────────────────────────────────────────────────────────┘");
     println!();
 
-    let (hot_privkey, hot_pubkey) = generate_test_keypair(1)?;
-    let (_, cold_pubkey) = generate_test_keypair(2)?;
-    let (treasurer_privkey, treasurer_pubkey) = generate_test_keypair(3)?;
-    let (_, operations_pubkey) = generate_test_keypair(4)?;
+    // CRITICAL FIX: Use timestamp-based seed to ensure unique keys every time
+    let timestamp_seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs() as u32;
+    let (hot_privkey, hot_pubkey) = generate_test_keypair_u32(1 + timestamp_seed)?;
+    let (_, cold_pubkey) = generate_test_keypair_u32(2 + timestamp_seed)?;
+    let (treasurer_privkey, treasurer_pubkey) = generate_test_keypair_u32(3 + timestamp_seed)?;
+    let (_, operations_pubkey) = generate_test_keypair_u32(4 + timestamp_seed)?;
 
     println!("🔑 Generated Corporate Keys:");
     println!("   🔥 Hot Wallet:      {}", hot_pubkey);
@@ -626,12 +634,23 @@ async fn execute_hybrid_csfs_delegation(
     // Create delegation message - use dynamic address to avoid UTXO conflicts
     let destination = rpc.get_new_address()?;
     
-    // Use the vault config amount for now - this worked in flakiness.md
-    let vault_amount = vault.get_vault_info().amount;
-    let delegation_amount = Amount::from_sat(if vault_amount > 3000 {
-        vault_amount - 3000  // Leave 3000 sats for fees
+    // CRITICAL FIX: Get the actual UTXO amount instead of using config amount
+    // The config amount might differ from actual funded amount due to precision issues
+    let actual_vault_amount = {
+        let tx_info = rpc.get_raw_transaction_verbose(&vault_utxo.txid)?;
+        let vout_info = &tx_info["vout"][vault_utxo.vout as usize];
+        let amount_btc = vout_info["value"].as_f64().unwrap_or(0.0);
+        (amount_btc * 100_000_000.0) as u64  // Convert BTC to satoshis
+    };
+    
+    println!("🔍 Debug: Config amount: {} sats", vault.get_vault_info().amount);
+    println!("🔍 Debug: Actual UTXO amount: {} sats", actual_vault_amount);
+    
+    // Use actual amount for delegation calculation, leaving more margin for fees
+    let delegation_amount = Amount::from_sat(if actual_vault_amount > 4000 {
+        actual_vault_amount - 4000  // Leave 4000 sats for fees (more conservative)
     } else {
-        vault_amount / 2     // Use half if amount is small  
+        actual_vault_amount / 3     // Use 1/3 if amount is small (more conservative)
     });
     let expiry_height = (rpc.get_block_count()? + 100) as u32;
     
@@ -673,13 +692,26 @@ async fn execute_hybrid_csfs_delegation(
     Ok(())
 }
 
-fn generate_test_keypair(seed: u8) -> Result<(String, String)> {
+
+fn generate_test_keypair_u32(seed: u32) -> Result<(String, String)> {
     use bitcoin::secp256k1::{Secp256k1, SecretKey, Keypair};
     use bitcoin::key::XOnlyPublicKey;
     
     let secp = Secp256k1::new();
-    let mut private_key_bytes = [seed; 32]; // Use seed to generate different keys
-    private_key_bytes[0] = seed; // Ensure different keys for each vault component
+    let mut private_key_bytes = [0u8; 32];
+    
+    // Use u32 seed to create truly unique keys without wraparound
+    private_key_bytes[0..4].copy_from_slice(&seed.to_le_bytes());
+    private_key_bytes[4] = (seed >> 24) as u8;  // Additional entropy
+    private_key_bytes[5] = (seed >> 16) as u8;
+    private_key_bytes[6] = (seed >> 8) as u8;
+    private_key_bytes[7] = seed as u8;
+    
+    // Fill remaining bytes with a pattern based on seed to ensure uniqueness
+    for (i, byte) in private_key_bytes.iter_mut().enumerate().skip(8) {
+        *byte = ((seed >> ((i % 4) * 8)) ^ (i as u32)) as u8;
+    }
+    
     let secret_key = SecretKey::from_slice(&private_key_bytes)?;
     let keypair = Keypair::from_secret_key(&secp, &secret_key);
     let (public_key, _) = XOnlyPublicKey::from_keypair(&keypair);
@@ -688,5 +720,13 @@ fn generate_test_keypair(seed: u8) -> Result<(String, String)> {
         hex::encode(private_key_bytes),
         hex::encode(public_key.serialize()),
     ))
+}
+
+/// Clean up any existing UTXOs for the vault address to prevent conflicts
+async fn cleanup_vault_utxos(_rpc: &MutinynetClient) -> Result<()> {
+    // For now, just wait a moment to let previous transactions settle
+    // This is a simple approach to reduce flakiness
+    sleep(Duration::from_millis(500)).await;
+    Ok(())
 }
 

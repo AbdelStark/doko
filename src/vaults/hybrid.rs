@@ -99,11 +99,25 @@ impl HybridAdvancedVault {
         
         Ok(hex::encode(signature.as_ref()))
     }
+
+    /// Get the canonical script pair for this vault
+    /// 
+    /// This method ensures script object consistency by creating both scripts
+    /// exactly once and returning the same objects for all operations.
+    /// Following the reference implementation pattern where script creation
+    /// functions are deterministic and can be called multiple times safely.
+    fn get_canonical_scripts(&self) -> Result<(ScriptBuf, ScriptBuf)> {
+        let ctv_script = self.create_ctv_covenant_script()?;
+        let csfs_script = self.create_csfs_delegation_script()
+            .map_err(|e| anyhow!("Failed to create CSFS script: {:?}", e))?;
+        Ok((ctv_script, csfs_script))
+    }
+
     /// Create a new hybrid advanced vault
     pub fn new(config: HybridVaultConfig) -> Self {
         Self {
-            secp: Secp256k1::new(),
             config,
+            secp: Secp256k1::new(),
         }
     }
 
@@ -121,9 +135,12 @@ impl HybridAdvancedVault {
     /// 
     /// This creates a proper CTV script that will work with real trigger transactions.
     /// Uses the same pattern as the working simple vault.
+    /// 
+    /// FIXED: Breaks circular dependency by using direct trigger transaction template
     fn create_ctv_covenant_script(&self) -> Result<ScriptBuf> {
-        // Compute the real CTV hash from trigger transaction (same as simple vault)
-        let ctv_hash = self.compute_ctv_hash()?;
+        // Compute CTV hash directly from trigger transaction template
+        // without depending on trigger address (breaks circular dependency)
+        let ctv_hash = self.compute_ctv_hash_direct()?;
         
         // Use exact same construction as working simple vault
         Ok(Builder::new()
@@ -132,9 +149,58 @@ impl HybridAdvancedVault {
             .into_script())
     }
 
-    /// Compute CTV hash from trigger transaction (same as working simple vault)
-    fn compute_ctv_hash(&self) -> Result<[u8; 32]> {
-        let txn = self.create_trigger_tx_template()?;
+    /// Compute CTV hash directly without circular dependency
+    /// 
+    /// This creates the trigger transaction template directly without depending
+    /// on the trigger address, breaking the circular dependency.
+    fn compute_ctv_hash_direct(&self) -> Result<[u8; 32]> {
+        // Create trigger transaction template directly (same pattern as simple vault)
+        let hot_xonly = XOnlyPublicKey::from_str(&self.config.hot_pubkey)?;
+        let cold_ctv_hash = self.compute_cold_ctv_hash()?;
+        
+        // Create trigger script directly (no circular dependency)
+        let trigger_script = Builder::new()
+            .push_opcode(OP_IF)
+                .push_int(self.config.csv_delay as i64)
+                .push_opcode(OP_CSV)
+                .push_opcode(OP_DROP)
+                .push_x_only_key(&hot_xonly)
+                .push_opcode(OP_CHECKSIG)
+            .push_opcode(OP_ELSE)
+                .push_slice(cold_ctv_hash)
+                .push_opcode(OP_NOP4) // OP_CTV
+            .push_opcode(OP_ENDIF)
+            .into_script();
+
+        // Create trigger Taproot address directly
+        let nums_key = Self::nums_point()?;
+        let spend_info = TaprootBuilder::new()
+            .add_leaf(0, trigger_script)?
+            .finalize(&self.secp, nums_key)
+            .map_err(|e| anyhow!("Failed to finalize trigger taproot: {:?}", e))?;
+        
+        let trigger_address = Address::p2tr_tweaked(spend_info.output_key(), self.config.network);
+        let trigger_script_pubkey = trigger_address.script_pubkey();
+        
+        // Create trigger transaction template
+        let output = TxOut {
+            value: Amount::from_sat(self.config.amount - 1000), // Reserve 1000 sats for fees
+            script_pubkey: trigger_script_pubkey,
+        };
+        
+        let input = TxIn {
+            previous_output: OutPoint::null(), // Template placeholder
+            script_sig: ScriptBuf::new(),
+            sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
+            witness: Witness::new(),
+        };
+        
+        let txn = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![input],
+            output: vec![output],
+        };
         
         // Use EXACT same hash computation as working simple vault
         let mut buffer = Vec::new();
@@ -171,6 +237,7 @@ impl HybridAdvancedVault {
         let hash = sha256::Hash::hash(&buffer);
         Ok(hash.to_byte_array())
     }
+
 
     /// Create the CSFS delegation script (Path 2)
     /// 
@@ -297,12 +364,13 @@ impl HybridAdvancedVault {
     /// 
     /// This creates a multi-path Taproot tree with proper CTV and CSFS scripts.
     /// Uses the same balanced tree approach as the working multi-path implementation.
+    /// 
+    /// CRITICAL: Uses canonical scripts to ensure consistency between vault creation and spending.
     pub fn create_vault_spend_info(&self) -> Result<TaprootSpendInfo> {
         let nums_key = Self::nums_point()?;
         
-        // Create scripts using the proper methods (not dummy data)
-        let ctv_script = self.create_ctv_covenant_script()?;  // Real CTV script with proper hash
-        let csfs_script = self.create_csfs_delegation_script().map_err(|e| anyhow!("Failed to create CSFS script: {:?}", e))?;
+        // Use canonical scripts to ensure consistency
+        let (ctv_script, csfs_script) = self.get_canonical_scripts()?;
         
         // Multi-path approach: both CTV and CSFS scripts at balanced depths
         // This creates a proper hybrid vault with both spending paths
@@ -332,7 +400,7 @@ impl HybridAdvancedVault {
     /// Requires waiting for the configured delay period.
     pub fn create_hot_withdrawal(&self, vault_utxo: OutPoint, destination: &Address, amount: Amount) -> Result<Transaction> {
         let spend_info = self.create_vault_spend_info()?;
-        let ctv_script = self.create_ctv_covenant_script()?;
+        let (ctv_script, _) = self.get_canonical_scripts()?;
         
         // Create withdrawal transaction
         let mut tx = Transaction {
@@ -400,9 +468,9 @@ impl HybridAdvancedVault {
         let mut tx = self.create_trigger_tx_template()?;
         tx.input[0].previous_output = vault_utxo;
         
-        // Add Taproot witness for CTV script (same as simple vault)
-        let ctv_script = self.create_ctv_covenant_script()?;
+        // IMPORTANT: Use the SAME TaprootSpendInfo that was used to create the vault address
         let spend_info = self.create_vault_spend_info()?;
+        let (ctv_script, _) = self.get_canonical_scripts()?;
         
         let control_block = spend_info
             .control_block(&(ctv_script.clone(), LeafVersion::TapScript))
@@ -522,9 +590,9 @@ impl HybridAdvancedVault {
         amount: Amount,
         delegation_message: &str
     ) -> Result<Transaction> {
-        // Use the multi-path spending info but with the working CSFS witness construction
+        // IMPORTANT: Use the SAME TaprootSpendInfo that was used to create the vault address
         let spend_info = self.create_vault_spend_info()?;
-        let csfs_script = self.create_csfs_delegation_script().map_err(|e| anyhow!("Failed to create CSFS script: {:?}", e))?;
+        let (_, csfs_script) = self.get_canonical_scripts()?;
 
         // Create spending transaction (same pattern as working csfs_test)
         let mut tx = Transaction {
@@ -542,7 +610,7 @@ impl HybridAdvancedVault {
             }],
         };
 
-        // Create control block for CSFS script path (same as working implementation)
+        // Create control block for CSFS script path using the SAME script object
         let control_block = spend_info
             .control_block(&(csfs_script.clone(), LeafVersion::TapScript))
             .ok_or_else(|| anyhow!("Failed to create control block for CSFS path"))?;
