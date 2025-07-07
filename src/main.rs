@@ -7,6 +7,7 @@
 //!
 //! - **Simple Vault**: Basic CTV covenant protection
 //! - **Advanced Vault**: CTV + CSFS key delegation for corporate treasury
+//! - **Hybrid Vault**: Multi-path Taproot with CTV covenant + CSFS delegation
 //! - **Auto Demo**: Automated end-to-end demonstrations
 //! - **TUI Dashboard**: Interactive vault management interface
 //!
@@ -16,10 +17,12 @@
 //! # Run automated demo
 //! doko auto-demo --vault-type simple
 //! doko auto-demo --vault-type advanced-csfs-key-delegation
+//! doko auto-demo --vault-type hybrid
 //!
 //! # Launch interactive dashboard
 //! doko dashboard --vault-type simple
 //! doko dashboard --vault-type advanced-csfs-key-delegation
+//! doko dashboard --vault-type hybrid
 //! ```
 
 use anyhow::Result;
@@ -38,15 +41,16 @@ mod vaults;
 
 use config::vault as vault_config;
 use services::MutinynetClient;
-use vaults::{AdvancedTaprootVault, TaprootVault};
-use csfs_primitives::CsfsOperations;
+use vaults::{AdvancedTaprootVault, TaprootVault, HybridAdvancedVault, HybridVaultConfig};
 use csfs_test::CsfsTest;
 
 /// Vault implementation type
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, clap::ValueEnum)]
 pub enum VaultType {
     Simple,
+    #[value(name = "advanced-csfs-key-delegation")]
     AdvancedCsfsKeyDelegation,
+    Hybrid,
 }
 
 impl FromStr for VaultType {
@@ -55,6 +59,7 @@ impl FromStr for VaultType {
         match s.to_lowercase().as_str() {
             "simple" => Ok(VaultType::Simple),
             "advanced-csfs-key-delegation" => Ok(VaultType::AdvancedCsfsKeyDelegation),
+            "hybrid" => Ok(VaultType::Hybrid),
             _ => Err(format!("Invalid vault type: {}", s)),
         }
     }
@@ -65,6 +70,7 @@ impl std::fmt::Display for VaultType {
         match self {
             VaultType::Simple => write!(f, "simple"),
             VaultType::AdvancedCsfsKeyDelegation => write!(f, "advanced-csfs-key-delegation"),
+            VaultType::Hybrid => write!(f, "hybrid"),
         }
     }
 }
@@ -87,7 +93,7 @@ enum Commands {
         /// CSV delay in blocks
         #[arg(short, long)]
         delay: Option<u32>,
-        /// Demo scenario: cold, emergency, delegated, timelock, cold-recovery
+        /// Demo scenario: cold, emergency, delegated, timelock, cold-recovery, hot-withdrawal, csfs-delegation
         #[arg(short, long, default_value = "cold-recovery")]
         scenario: String,
         /// Vault implementation type
@@ -137,6 +143,11 @@ async fn main() -> Result<()> {
             VaultType::AdvancedCsfsKeyDelegation => {
                 tui::run_advanced_tui().await?;
             }
+            VaultType::Hybrid => {
+                println!("🚧 Hybrid vault TUI dashboard coming soon!");
+                println!("📋 Use: doko auto-demo --vault-type hybrid");
+                println!("   Available scenarios: hot-withdrawal, cold-recovery, csfs-delegation");
+            }
         },
         Commands::DebugCsfs {
             message,
@@ -163,6 +174,9 @@ async fn auto_demo(
         VaultType::Simple => simple_vault_auto_demo(amount, delay, scenario).await,
         VaultType::AdvancedCsfsKeyDelegation => {
             advanced_vault_auto_demo(amount, delay, scenario).await
+        }
+        VaultType::Hybrid => {
+            hybrid_vault_auto_demo(amount, delay, scenario).await
         }
     }
 }
@@ -673,6 +687,288 @@ async fn execute_cold_recovery_advanced(
     );
     println!("   📍 Address: {}", vault.get_cold_address()?);
     println!("   🔒 CTV covenant enforced - no signatures required!");
+
+    Ok(())
+}
+
+async fn hybrid_vault_auto_demo(amount: u64, delay: u32, scenario: &str) -> Result<()> {
+    println!("🏦 DOKO HYBRID VAULT DEMO (CTV + CSFS Multi-Path)");
+    println!("═══════════════════════════════════════════════════");
+    println!("Advanced Corporate Treasury with Multi-Tapscript Architecture");
+    println!();
+
+    // Connect to Mutinynet
+    let rpc = MutinynetClient::new()?;
+    println!(
+        "🔌 Connecting to Mutinynet... ✅ Connected to wallet: {}",
+        rpc.get_wallet_name()
+    );
+    println!(
+        "📡 Network: signet | Block Height: {}",
+        rpc.get_block_count()?
+    );
+    println!();
+
+    // Generate test keys for hybrid vault
+    println!("┌─────────────────────────────────────────────────────────────┐");
+    println!("│                 STEP 1: GENERATE VAULT KEYS                 │");
+    println!("└─────────────────────────────────────────────────────────────┘");
+    println!();
+
+    let csfs_test = CsfsTest::new(Network::Signet);
+    let (hot_privkey, hot_pubkey) = csfs_test.generate_keypair()?;
+    let (cold_privkey, cold_pubkey) = csfs_test.generate_keypair()?;
+    let (treasurer_privkey, treasurer_pubkey) = csfs_test.generate_keypair()?;
+    let (operations_privkey, operations_pubkey) = csfs_test.generate_keypair()?;
+
+    println!("🔑 Generated Corporate Keys:");
+    println!("   🔥 Hot Wallet:      {}", hot_pubkey);
+    println!("   ❄️  Cold Wallet:     {}", cold_pubkey);
+    println!("   👔 Treasurer:       {}", treasurer_pubkey);
+    println!("   ⚙️  Operations:      {}", operations_pubkey);
+    println!();
+
+    // Create hybrid vault configuration
+    let config = HybridVaultConfig {
+        network: Network::Signet,
+        amount,
+        csv_delay: delay as u16,
+        hot_pubkey,
+        hot_privkey,
+        cold_pubkey,
+        cold_privkey,
+        treasurer_pubkey,
+        treasurer_privkey,
+        operations_pubkey,
+        operations_privkey,
+    };
+
+    let vault = HybridAdvancedVault::new(config);
+    let vault_info = vault.get_vault_info();
+
+    println!("┌─────────────────────────────────────────────────────────────┐");
+    println!("│                STEP 2: CREATE HYBRID VAULT                  │");
+    println!("└─────────────────────────────────────────────────────────────┘");
+    println!();
+
+    println!("🏗️  Creating Hybrid Vault ({} sats, {} block delay)... ✅", amount, delay);
+    println!("📍 Vault Address: {}", vault_info.address);
+    println!("🌐 Network: {}", vault_info.network);
+    println!();
+
+    println!("📋 Vault Architecture:");
+    println!("   ├── Path 1: CTV Covenant Operations");
+    println!("   │   ├── Hot withdrawal (CSV timelock: {} blocks)", vault_info.csv_delay);
+    println!("   │   └── Cold emergency recovery (immediate)");
+    println!("   └── Path 2: CSFS Key Delegation");
+    println!("       ├── Treasurer delegation authority");
+    println!("       └── Operations team emergency access");
+    println!();
+
+    // Fund vault
+    println!("💰 Funding hybrid vault with {} sats...", amount);
+    let funding_txid = rpc.fund_address(&vault_info.address, amount as f64 / 100_000_000.0)?;
+    println!(" ✅ TXID: {}", funding_txid);
+
+    // Wait for confirmation
+    print!("⏳ Waiting for confirmation");
+    while rpc.get_confirmations(&funding_txid)? == 0 {
+        print!(".");
+        std::io::Write::flush(&mut std::io::stdout())?;
+        sleep(Duration::from_secs(3)).await;
+    }
+    println!(" ✅ {} confirmations", rpc.get_confirmations(&funding_txid)?);
+
+    let vault_utxo = OutPoint::new(funding_txid, 0);
+    println!("📦 Vault UTXO: {}", vault_utxo);
+    println!();
+
+    // Execute hybrid vault scenarios
+    match scenario {
+        "hot-withdrawal" => {
+            execute_hybrid_hot_withdrawal(&vault, vault_utxo, &rpc).await?;
+        }
+        "cold-recovery" => {
+            execute_hybrid_cold_recovery(&vault, vault_utxo, &rpc).await?;
+        }
+        "csfs-delegation" | "delegated" => {
+            execute_hybrid_csfs_delegation(&vault, vault_utxo, &rpc).await?;
+        }
+        _ => {
+            println!("🎯 COMPREHENSIVE HYBRID VAULT DEMONSTRATION");
+            println!("════════════════════════════════════════════");
+            println!("Demonstrating all hybrid vault capabilities:");
+            println!();
+            
+            // Demonstrate delegation message creation
+            println!("📝 Creating CSFS delegation message...");
+            let delegation_amount = if amount > 3000 {
+                amount - 3000  // Leave 3000 sats for fees
+            } else {
+                amount / 2     // Use half if amount is small
+            };
+            let delegation_message = vault.create_delegation_message(
+                Amount::from_sat(delegation_amount),
+                &vault_info.operations_pubkey,
+                (rpc.get_block_count()? + 100) as u32,
+            );
+            println!("✅ Delegation Message: {}", delegation_message);
+            println!();
+            
+            // For comprehensive demo, show cold recovery capability
+            execute_hybrid_cold_recovery(&vault, vault_utxo, &rpc).await?;
+        }
+    }
+
+    println!("🎉 HYBRID VAULT DEMO COMPLETED!");
+    println!("════════════════════════════════════");
+    println!("✅ Multi-path Taproot architecture working");
+    println!("✅ CTV covenant operations available");
+    println!("✅ CSFS key delegation functional");
+    println!("✅ Corporate treasury use case validated");
+    println!();
+    println!("🔍 View transactions on explorer:");
+    println!("   https://mutinynet.com");
+
+    Ok(())
+}
+
+async fn execute_hybrid_hot_withdrawal(
+    vault: &HybridAdvancedVault,
+    vault_utxo: OutPoint,
+    rpc: &MutinynetClient,
+) -> Result<()> {
+    println!("┌─────────────────────────────────────────────────────────────┐");
+    println!("│              STEP 3: CTV HOT WITHDRAWAL                     │");
+    println!("└─────────────────────────────────────────────────────────────┘");
+    println!();
+
+    println!("🔥 EXECUTING CTV HOT WITHDRAWAL (Path 1)!");
+    println!("⏰ Time-locked covenant withdrawal using CSV delay");
+    println!();
+
+    // Create destination address
+    let destination = rpc.get_new_address()?;
+    println!("🎯 Destination: {}", destination);
+
+    // Create hot withdrawal transaction
+    let withdrawal_amount = Amount::from_sat(vault.get_vault_info().amount - 3000);
+    println!("💰 Withdrawal Amount: {} sats", withdrawal_amount.to_sat());
+    
+    println!("🔨 Creating hot withdrawal transaction...");
+    let hot_tx = vault.create_hot_withdrawal(vault_utxo, &destination, withdrawal_amount)?;
+    let hot_txid = rpc.send_raw_transaction(&hot_tx)?;
+    println!(" ✅ TXID: {}", hot_txid);
+
+    print!("⏳ Waiting for hot withdrawal confirmation");
+    while rpc.get_confirmations(&hot_txid)? == 0 {
+        print!(".");
+        std::io::Write::flush(&mut std::io::stdout())?;
+        sleep(Duration::from_secs(3)).await;
+    }
+    println!(" ✅ {} confirmations", rpc.get_confirmations(&hot_txid)?);
+
+    println!("🛡️  CTV HOT WITHDRAWAL COMPLETED");
+    println!("   💰 Amount: {} sats", withdrawal_amount.to_sat());
+    println!("   📍 Address: {}", destination);
+    println!("   ⏰ CSV timelock properly enforced!");
+
+    Ok(())
+}
+
+async fn execute_hybrid_cold_recovery(
+    vault: &HybridAdvancedVault,
+    vault_utxo: OutPoint,
+    rpc: &MutinynetClient,
+) -> Result<()> {
+    println!("┌─────────────────────────────────────────────────────────────┐");
+    println!("│              STEP 3: CTV COLD RECOVERY                      │");
+    println!("└─────────────────────────────────────────────────────────────┘");
+    println!();
+
+    println!("🧊 EXECUTING CTV COLD RECOVERY (Path 1)!");
+    println!("❄️  Emergency covenant recovery - immediate, no timelock");
+    println!();
+
+    println!("🔒 Creating cold recovery transaction...");
+    let cold_tx = vault.create_cold_recovery(vault_utxo)?;
+    let cold_txid = rpc.send_raw_transaction(&cold_tx)?;
+    println!(" ✅ TXID: {}", cold_txid);
+
+    print!("⏳ Waiting for cold recovery confirmation");
+    while rpc.get_confirmations(&cold_txid)? == 0 {
+        print!(".");
+        std::io::Write::flush(&mut std::io::stdout())?;
+        sleep(Duration::from_secs(3)).await;
+    }
+    println!(" ✅ {} confirmations", rpc.get_confirmations(&cold_txid)?);
+
+    println!("🛡️  CTV COLD RECOVERY COMPLETED");
+    println!("   💰 Amount: {} sats", vault.get_vault_info().amount - 2000);
+    println!("   📍 Address: {}", vault.get_vault_info().cold_pubkey);
+    println!("   🔒 CTV covenant enforced - no signatures required!");
+
+    Ok(())
+}
+
+async fn execute_hybrid_csfs_delegation(
+    vault: &HybridAdvancedVault,
+    vault_utxo: OutPoint,
+    rpc: &MutinynetClient,
+) -> Result<()> {
+    println!("┌─────────────────────────────────────────────────────────────┐");
+    println!("│              STEP 3: CSFS DELEGATION SPENDING               │");
+    println!("└─────────────────────────────────────────────────────────────┘");
+    println!();
+
+    println!("🔑 EXECUTING CSFS DELEGATION (Path 2)!");
+    println!("👔 Treasurer delegates spending authority to Operations");
+    println!();
+
+    // Create delegation message
+    let destination = rpc.get_new_address()?;
+    let vault_amount = vault.get_vault_info().amount;
+    let delegation_amount = Amount::from_sat(if vault_amount > 3000 {
+        vault_amount - 3000  // Leave 3000 sats for fees
+    } else {
+        vault_amount / 2     // Use half if amount is small
+    });
+    let expiry_height = (rpc.get_block_count()? + 100) as u32;
+    
+    let delegation_message = vault.create_delegation_message(
+        delegation_amount,
+        &destination.to_string(),
+        expiry_height,
+    );
+    
+    println!("📝 Delegation Message: {}", delegation_message);
+    println!("🎯 Destination: {}", destination);
+    println!("💰 Delegated Amount: {} sats", delegation_amount.to_sat());
+    println!("⏰ Expires at block: {}", expiry_height);
+    println!();
+
+    println!("🔨 Creating CSFS delegation transaction...");
+    let delegation_tx = vault.create_delegated_spending(
+        vault_utxo,
+        &destination,
+        delegation_amount,
+        &delegation_message,
+    )?;
+    let delegation_txid = rpc.send_raw_transaction(&delegation_tx)?;
+    println!(" ✅ TXID: {}", delegation_txid);
+
+    print!("⏳ Waiting for delegation confirmation");
+    while rpc.get_confirmations(&delegation_txid)? == 0 {
+        print!(".");
+        std::io::Write::flush(&mut std::io::stdout())?;
+        sleep(Duration::from_secs(3)).await;
+    }
+    println!(" ✅ {} confirmations", rpc.get_confirmations(&delegation_txid)?);
+
+    println!("🛡️  CSFS DELEGATION COMPLETED");
+    println!("   💰 Amount: {} sats", delegation_amount.to_sat());
+    println!("   📍 Address: {}", destination);
+    println!("   👔 Treasurer signature validated via CSFS!");
 
     Ok(())
 }

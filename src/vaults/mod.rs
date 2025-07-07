@@ -9,6 +9,8 @@
 
 pub mod simple;
 pub mod advanced;
+pub mod hybrid;
 
 pub use simple::TaprootVault;
 pub use advanced::AdvancedTaprootVault;
+pub use hybrid::{HybridAdvancedVault, HybridVaultConfig};

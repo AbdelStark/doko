@@ -28,6 +28,7 @@ use hex;
 pub const OP_CHECKSIGFROMSTACK: u8 = 0xcc; // 204 decimal
 
 /// Simple CSFS test operations
+#[derive(Debug)]
 pub struct CsfsTest {
     secp: Secp256k1<secp256k1::All>,
     network: Network,
@@ -75,6 +76,11 @@ impl CsfsTest {
         
         // Try raw 64-byte signature first
         Ok(hex::encode(signature.as_ref()))
+    }
+
+    /// Create a simple CSFS script (alias for delegation script)
+    pub fn create_simple_csfs_script(&self, _pubkey_hex: &str) -> VaultResult<ScriptBuf> {
+        self.create_csfs_delegation_script()
     }
 
     /// Create a proper CSFS delegation script following working vault patterns
