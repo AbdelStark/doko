@@ -526,6 +526,9 @@ impl App {
 
         // Update address balances if we have a vault
         if let Some(ref vault) = self.vault {
+            let vault_info = vault.get_vault_info();
+            
+            // Query vault address balance
             if let Ok(vault_address) = vault.get_vault_address() {
                 self.vault_balance = self
                     .explorer
@@ -533,8 +536,24 @@ impl App {
                     .await
                     .unwrap_or(0);
             }
-            // For hybrid vaults, we can only check the main vault address
-            // Individual role addresses are derived from public keys
+            
+            // Derive and query hot wallet address balance
+            if let Ok(hot_address) = self.derive_address_from_pubkey(&vault_info.hot_pubkey) {
+                self.hot_balance = self
+                    .explorer
+                    .get_address_balance(&hot_address)
+                    .await
+                    .unwrap_or(0);
+            }
+            
+            // Derive and query cold wallet address balance
+            if let Ok(cold_address) = self.derive_address_from_pubkey(&vault_info.cold_pubkey) {
+                self.cold_balance = self
+                    .explorer
+                    .get_address_balance(&cold_address)
+                    .await
+                    .unwrap_or(0);
+            }
         }
 
         // Update vault status based on confirmations and CSV delay
@@ -1185,6 +1204,17 @@ impl App {
         }
         
         Ok(())
+    }
+
+    /// Derive a Bitcoin address from a public key
+    fn derive_address_from_pubkey(&self, pubkey: &str) -> Result<String> {
+        let address = bitcoin::Address::p2tr_tweaked(
+            bitcoin::key::TweakedPublicKey::dangerous_assume_tweaked(
+                bitcoin::key::XOnlyPublicKey::from_slice(&hex::decode(pubkey)?)?
+            ),
+            bitcoin::Network::Signet
+        ).to_string();
+        Ok(address)
     }
 
 }
@@ -2148,8 +2178,10 @@ fn render_vault_details_popup(f: &mut Frame, app: &App) {
         let vault_address = vault
             .get_vault_address()
             .unwrap_or_else(|_| "Error loading address".to_string());
-        let hot_address = format!("(Key: {}...)", &vault_info.hot_pubkey[..20]);
-        let cold_address = format!("(Key: {}...)", &vault_info.cold_pubkey[..20]);
+        let hot_address = app.derive_address_from_pubkey(&vault_info.hot_pubkey)
+            .unwrap_or_else(|_| format!("(Key: {}...)", &vault_info.hot_pubkey[..20]));
+        let cold_address = app.derive_address_from_pubkey(&vault_info.cold_pubkey)
+            .unwrap_or_else(|_| format!("(Key: {}...)", &vault_info.cold_pubkey[..20]));
 
         let details_text = format!(
             "\n📊 CONFIGURATION\n\
