@@ -88,7 +88,7 @@ pub struct HybridAdvancedVault {
 
 impl HybridAdvancedVault {
     /// Sign a message with the given private key for CSFS delegation
-    fn sign_message(&self, message: &[u8], private_key_hex: &str) -> Result<String> {
+    pub fn sign_message(&self, message: &[u8], private_key_hex: &str) -> Result<String> {
         let private_key_bytes = hex::decode(private_key_hex)?;
         let secret_key = SecretKey::from_slice(&private_key_bytes)?;
         let keypair = Keypair::from_secret_key(&self.secp, &secret_key);

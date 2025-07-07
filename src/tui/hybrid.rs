@@ -123,6 +123,16 @@ pub struct App {
     pub message_to_sign: String,
     /// Signed message result
     pub signed_message: Option<String>,
+    /// Delegation creation input fields
+    pub delegation_amount_input: String,
+    pub delegation_recipient_input: String,
+    pub delegation_expiry_input: String,
+    /// Currently selected input field for delegation creation
+    pub delegation_input_field: DelegationInputField,
+    /// Show delegation execution popup
+    pub show_delegation_execution: bool,
+    /// Selected delegation for execution
+    pub selected_delegation_id: Option<String>,
 }
 
 /// Vault operational status
@@ -162,7 +172,7 @@ pub struct TransactionInfo {
 }
 
 /// Role-based access control for corporate treasury operations
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Role {
     /// CEO - Full access to all operations
     CEO,
@@ -215,6 +225,14 @@ pub enum DelegationStatus {
     Expired,
     Used,
     Revoked,
+}
+
+/// Input field selection for delegation creation
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum DelegationInputField {
+    Amount,
+    Recipient,
+    Expiry,
 }
 
 impl App {
@@ -275,6 +293,12 @@ impl App {
             message_to_sign: String::new(),
             signed_message: None,
             vault_config: None,
+            delegation_amount_input: String::new(),
+            delegation_recipient_input: String::new(),
+            delegation_expiry_input: String::new(),
+            delegation_input_field: DelegationInputField::Amount,
+            show_delegation_execution: false,
+            selected_delegation_id: None,
         };
 
         // Initialize transcript log
@@ -512,6 +536,9 @@ impl App {
 
         // Update vault status based on confirmations and CSV delay
         self.update_vault_status().await?;
+
+        // Update delegation statuses
+        self.update_delegation_statuses().await?;
 
         Ok(())
     }
@@ -856,6 +883,238 @@ impl App {
         });
     }
 
+    /// Create a new delegation
+    pub async fn create_delegation(&mut self) -> Result<()> {
+        if self.current_role != Role::Treasurer && self.current_role != Role::CEO {
+            self.show_popup("❌ Access Denied: Only Treasurer or CEO can create delegations".to_string());
+            return Ok(());
+        }
+
+        if let Some(ref vault) = self.vault {
+            // Parse inputs
+            let amount = self.delegation_amount_input.parse::<u64>()
+                .map_err(|_| anyhow::anyhow!("Invalid amount"))?;
+            
+            let expiry_blocks = self.delegation_expiry_input.parse::<u32>()
+                .map_err(|_| anyhow::anyhow!("Invalid expiry blocks"))?;
+
+            let recipient = self.delegation_recipient_input.clone();
+            if recipient.is_empty() {
+                return Err(anyhow::anyhow!("Recipient address cannot be empty"));
+            }
+
+            // Calculate expiry height
+            let current_height = self.rpc.get_block_count()?;
+            let expiry_height = current_height as u32 + expiry_blocks;
+
+            // Create delegation message
+            let delegation_message = vault.create_delegation_message(
+                bitcoin::Amount::from_sat(amount),
+                &recipient,
+                expiry_height,
+            );
+
+            // Sign the delegation message (treasurer signs)
+            if let Some(ref config) = self.vault_config {
+                let delegation_signature = vault.sign_message(
+                    delegation_message.as_bytes(),
+                    &config.treasurer_privkey,
+                )?;
+
+                // Create delegation info
+                let delegation_info = DelegationInfo {
+                    id: format!("del_{}", chrono::Utc::now().timestamp()),
+                    delegator: config.treasurer_pubkey.clone(),
+                    delegate: config.operations_pubkey.clone(),
+                    amount,
+                    expiry_height,
+                    message: delegation_message,
+                    signature: delegation_signature,
+                    created_at: chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+                    status: DelegationStatus::Active,
+                };
+
+                // Add to delegations list
+                self.delegations.push(delegation_info.clone());
+
+                // Log the action
+                self.log_to_transcript(format!(
+                    "🔑 Delegation created: {} sats to {} (expires at block {})",
+                    amount, recipient, expiry_height
+                ));
+
+                // Clear inputs and close popup
+                self.delegation_amount_input.clear();
+                self.delegation_recipient_input.clear();
+                self.delegation_expiry_input.clear();
+                self.show_delegation_popup = false;
+
+                self.show_popup(format!(
+                    "✅ Delegation created successfully!\nID: {}\nAmount: {} sats\nExpires at block: {}",
+                    delegation_info.id, amount, expiry_height
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Execute a delegation (spend using CSFS)
+    pub async fn execute_delegation(&mut self, delegation_id: String) -> Result<()> {
+        if self.current_role != Role::Operations && self.current_role != Role::CEO {
+            self.show_popup("❌ Access Denied: Only Operations team or CEO can execute delegations".to_string());
+            return Ok(());
+        }
+
+        // Find the delegation and clone the necessary data
+        let delegation_data = {
+            let delegation = self.delegations.iter()
+                .find(|d| d.id == delegation_id)
+                .ok_or_else(|| anyhow::anyhow!("Delegation not found"))?;
+
+            if delegation.status != DelegationStatus::Active {
+                self.show_popup("❌ Delegation is not active".to_string());
+                return Ok(());
+            }
+
+            // Clone the data we need
+            (delegation.amount, delegation.expiry_height, delegation.message.clone())
+        };
+
+        let (delegation_amount_val, expiry_height, delegation_message) = delegation_data;
+
+        // Check if delegation has expired
+        let current_height = self.rpc.get_block_count()? as u32;
+        if current_height >= expiry_height {
+            // Mark as expired
+            for d in &mut self.delegations {
+                if d.id == delegation_id {
+                    d.status = DelegationStatus::Expired;
+                }
+            }
+            self.show_popup("❌ Delegation has expired".to_string());
+            return Ok(());
+        }
+
+        if let (Some(ref vault), Some(vault_utxo)) = (&self.vault, &self.vault_utxo) {
+            self.processing = true;
+            self.progress_message = "Executing delegation...".to_string();
+
+            // Create destination address for the delegation
+            let destination = self.rpc.get_new_address()?;
+            let delegation_amount = bitcoin::Amount::from_sat(delegation_amount_val);
+
+            // Create delegated spending transaction
+            let delegation_tx = vault.create_delegated_spending(
+                *vault_utxo,
+                &destination,
+                delegation_amount,
+                &delegation_message,
+            )?;
+
+            // Broadcast the transaction
+            let delegation_txid = self.rpc.send_raw_transaction(&delegation_tx)?;
+
+            // Mark delegation as used
+            for d in &mut self.delegations {
+                if d.id == delegation_id {
+                    d.status = DelegationStatus::Used;
+                }
+            }
+
+            // Update vault status
+            self.vault_status = VaultStatus::Completed {
+                final_address: destination.to_string(),
+                amount: delegation_amount_val,
+                tx_type: "CSFS Delegation".to_string(),
+            };
+
+            // Add to transaction history
+            self.add_transaction(
+                delegation_txid.to_string(),
+                "CSFS Delegation Execution".to_string(),
+                delegation_amount_val,
+            );
+
+            // Log the action
+            self.log_to_transcript(format!(
+                "⚡ Delegation executed: {} (TXID: {})",
+                delegation_id, delegation_txid
+            ));
+
+            self.processing = false;
+            self.progress_message.clear();
+
+            self.show_popup(format!(
+                "⚡ Delegation executed successfully!\nTXID: {}\nAmount: {} sats",
+                delegation_txid, delegation_amount_val
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Revoke a delegation
+    pub fn revoke_delegation(&mut self, delegation_id: String) {
+        if self.current_role != Role::Treasurer && self.current_role != Role::CEO {
+            self.show_popup("❌ Access Denied: Only Treasurer or CEO can revoke delegations".to_string());
+            return;
+        }
+
+        for delegation in &mut self.delegations {
+            if delegation.id == delegation_id {
+                delegation.status = DelegationStatus::Revoked;
+                self.log_to_transcript(format!("🚫 Delegation revoked: {}", delegation_id));
+                self.show_popup(format!("✅ Delegation {} revoked successfully", delegation_id));
+                return;
+            }
+        }
+        self.show_popup("❌ Delegation not found".to_string());
+    }
+
+    /// Switch role
+    pub fn switch_role(&mut self, new_role: Role) {
+        self.current_role = new_role;
+        self.show_role_popup = false;
+        self.log_to_transcript(format!("👤 Switched to role: {}", new_role.display_name()));
+        self.show_popup(format!("✅ Switched to {}", new_role.display_name()));
+    }
+
+    /// Sign custom message
+    pub fn sign_custom_message(&mut self) -> Result<()> {
+        if self.current_role != Role::Treasurer && self.current_role != Role::CEO {
+            self.show_popup("❌ Access Denied: Only Treasurer or CEO can sign messages".to_string());
+            return Ok(());
+        }
+
+        if let (Some(ref vault), Some(ref config)) = (&self.vault, &self.vault_config) {
+            let signature = vault.sign_message(
+                self.message_to_sign.as_bytes(),
+                &config.treasurer_privkey,
+            )?;
+
+            self.signed_message = Some(signature.clone());
+            self.log_to_transcript(format!("📝 Message signed: {}", &self.message_to_sign[..50]));
+            
+            self.show_popup(format!(
+                "✅ Message signed successfully!\nSignature: {}...{}",
+                &signature[..20], &signature[signature.len()-20..]
+            ));
+        }
+        Ok(())
+    }
+
+    /// Update delegation statuses based on current block height
+    pub async fn update_delegation_statuses(&mut self) -> Result<()> {
+        let current_height = self.rpc.get_block_count()? as u32;
+        
+        for delegation in &mut self.delegations {
+            if delegation.status == DelegationStatus::Active && current_height >= delegation.expiry_height {
+                delegation.status = DelegationStatus::Expired;
+            }
+        }
+        Ok(())
+    }
+
 }
 
 fn generate_test_keypair_u32(seed: u32) -> Result<(String, String)> {
@@ -1052,7 +1311,122 @@ pub async fn run_tui() -> Result<Option<String>> {
                             }
                         }
                         KeyCode::Esc | KeyCode::Enter => {
-                            app.hide_popup();
+                            if app.show_delegation_popup || app.show_role_popup || app.show_message_signer {
+                                app.show_delegation_popup = false;
+                                app.show_role_popup = false;
+                                app.show_message_signer = false;
+                                app.show_delegation_execution = false;
+                            } else {
+                                app.hide_popup();
+                            }
+                        }
+                        // Delegation and role management keys
+                        KeyCode::Char('d') => {
+                            // Show delegation creation popup
+                            if app.current_role == Role::Treasurer || app.current_role == Role::CEO {
+                                app.show_delegation_popup = true;
+                                app.delegation_amount_input.clear();
+                                app.delegation_recipient_input.clear();
+                                app.delegation_expiry_input.clear();
+                                app.delegation_input_field = DelegationInputField::Amount;
+                            } else {
+                                app.show_popup("❌ Access Denied: Only Treasurer or CEO can create delegations".to_string());
+                            }
+                        }
+                        KeyCode::Char('s') => {
+                            // Show role selection popup
+                            app.show_role_popup = true;
+                        }
+                        KeyCode::Char('m') => {
+                            // Show message signing interface
+                            if app.current_role == Role::Treasurer || app.current_role == Role::CEO {
+                                app.show_message_signer = true;
+                                app.message_to_sign.clear();
+                                app.signed_message = None;
+                            } else {
+                                app.show_popup("❌ Access Denied: Only Treasurer or CEO can sign messages".to_string());
+                            }
+                        }
+                        // Handle delegation popup inputs
+                        _ if app.show_delegation_popup => {
+                            match key.code {
+                                KeyCode::Tab => {
+                                    app.delegation_input_field = match app.delegation_input_field {
+                                        DelegationInputField::Amount => DelegationInputField::Recipient,
+                                        DelegationInputField::Recipient => DelegationInputField::Expiry,
+                                        DelegationInputField::Expiry => DelegationInputField::Amount,
+                                    };
+                                }
+                                KeyCode::Enter => {
+                                    let create_future = app.create_delegation();
+                                    if let Err(e) = create_future.await {
+                                        app.show_popup(format!("Failed to create delegation: {}", e));
+                                    }
+                                }
+                                KeyCode::Char(c) => {
+                                    match app.delegation_input_field {
+                                        DelegationInputField::Amount => app.delegation_amount_input.push(c),
+                                        DelegationInputField::Recipient => app.delegation_recipient_input.push(c),
+                                        DelegationInputField::Expiry => app.delegation_expiry_input.push(c),
+                                    }
+                                }
+                                KeyCode::Backspace => {
+                                    match app.delegation_input_field {
+                                        DelegationInputField::Amount => { app.delegation_amount_input.pop(); }
+                                        DelegationInputField::Recipient => { app.delegation_recipient_input.pop(); }
+                                        DelegationInputField::Expiry => { app.delegation_expiry_input.pop(); }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        // Handle role selection popup
+                        _ if app.show_role_popup => {
+                            match key.code {
+                                KeyCode::Char('1') => app.switch_role(Role::CEO),
+                                KeyCode::Char('2') => app.switch_role(Role::Treasurer),
+                                KeyCode::Char('3') => app.switch_role(Role::Operations),
+                                KeyCode::Char('4') => app.switch_role(Role::Auditor),
+                                _ => {}
+                            }
+                        }
+                        // Handle message signing interface
+                        _ if app.show_message_signer => {
+                            match key.code {
+                                KeyCode::Enter => {
+                                    if let Err(e) = app.sign_custom_message() {
+                                        app.show_popup(format!("Failed to sign message: {}", e));
+                                    }
+                                }
+                                KeyCode::Char(c) => app.message_to_sign.push(c),
+                                KeyCode::Backspace => { app.message_to_sign.pop(); }
+                                _ => {}
+                            }
+                        }
+                        // Handle delegation execution
+                        KeyCode::Char('e') => {
+                            // Execute delegation (on delegations tab)
+                            if app.current_tab == 2 && !app.delegations.is_empty() {
+                                if let Some(delegation) = app.delegations.first() {
+                                    if delegation.status == DelegationStatus::Active {
+                                        let delegation_id = delegation.id.clone();
+                                        let execute_future = app.execute_delegation(delegation_id);
+                                        if let Err(e) = execute_future.await {
+                                            app.show_popup(format!("Failed to execute delegation: {}", e));
+                                        }
+                                    } else {
+                                        app.show_popup("❌ Delegation is not active".to_string());
+                                    }
+                                }
+                            }
+                        }
+                        KeyCode::Char('k') => {
+                            // Revoke delegation (on delegations tab)
+                            if app.current_tab == 2 && !app.delegations.is_empty() {
+                                if let Some(delegation) = app.delegations.first() {
+                                    app.revoke_delegation(delegation.id.clone());
+                                }
+                            }
                         }
                         _ => {}
                     }
@@ -1098,8 +1472,9 @@ fn render_ui(f: &mut Frame, app: &mut App) {
     match app.current_tab {
         0 => render_dashboard(f, chunks[1], app),
         1 => render_vault_control(f, chunks[1], app),
-        2 => render_transactions(f, chunks[1], app),
-        3 => render_settings(f, chunks[1], app),
+        2 => render_delegations(f, chunks[1], app),
+        3 => render_transactions(f, chunks[1], app),
+        4 => render_settings(f, chunks[1], app),
         _ => {}
     }
 
@@ -1114,6 +1489,18 @@ fn render_ui(f: &mut Frame, app: &mut App) {
     if app.show_vault_details {
         render_vault_details_popup(f, app);
     }
+
+    if app.show_delegation_popup {
+        render_delegation_creation_popup(f, app);
+    }
+
+    if app.show_role_popup {
+        render_role_selection_popup(f, app);
+    }
+
+    if app.show_message_signer {
+        render_message_signing_popup(f, app);
+    }
 }
 
 /// Render header with tabs and blockchain info
@@ -1122,7 +1509,7 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("🏦 Doko Vault Dashboard - Bitcoin CTV Vault Management")
+                .title(format!("🏦 Doko Hybrid Vault Dashboard - {} | Bitcoin CTV+CSFS Vault", app.current_role.display_name()))
                 .title_style(Style::default().fg(Color::Cyan).bold()),
         )
         .style(Style::default().fg(Color::White))
@@ -1748,6 +2135,207 @@ fn render_vault_details_popup(f: &mut Frame, app: &App) {
 }
 
 /// Helper function to create a centered rectangle
+/// Render delegations tab
+fn render_delegations(f: &mut Frame, area: Rect, app: &App) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),  // Role info
+            Constraint::Min(8),     // Delegations list
+            Constraint::Length(5),  // Controls
+        ])
+        .split(area);
+
+    // Role information
+    let role_text = format!(
+        "👤 Current Role: {} | 🔑 Permissions: {}",
+        app.current_role.display_name(),
+        app.current_role.permissions().join(", ")
+    );
+    let role_info = Paragraph::new(role_text)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("🎭 Role Information")
+                .title_style(Style::default().fg(Color::Cyan).bold()),
+        )
+        .wrap(Wrap { trim: true })
+        .style(Style::default().fg(Color::White));
+    f.render_widget(role_info, chunks[0]);
+
+    // Delegations list
+    let delegation_rows: Vec<Row> = app.delegations.iter().enumerate().map(|(i, delegation)| {
+        let status_icon = match delegation.status {
+            DelegationStatus::Active => "🟢",
+            DelegationStatus::Expired => "🟡",
+            DelegationStatus::Used => "✅",
+            DelegationStatus::Revoked => "❌",
+        };
+        Row::new(vec![
+            Cell::from(format!("{}", i + 1)),
+            Cell::from(format!("{}...{}", &delegation.id[..8], &delegation.id[delegation.id.len()-4..])),
+            Cell::from(format!("{} sats", delegation.amount)),
+            Cell::from(format!("Block {}", delegation.expiry_height)),
+            Cell::from(format!("{} {:?}", status_icon, delegation.status)),
+            Cell::from(delegation.created_at.clone()),
+        ])
+    }).collect();
+
+    let delegations_table = Table::new(
+        delegation_rows,
+        &[
+            Constraint::Length(3),   // #
+            Constraint::Length(15),  // ID
+            Constraint::Length(12),  // Amount
+            Constraint::Length(12),  // Expires
+            Constraint::Length(15),  // Status
+            Constraint::Min(20),     // Created
+        ]
+    )
+        .header(
+            Row::new(vec![
+                Cell::from("#").style(Style::default().fg(Color::Yellow).bold()),
+                Cell::from("ID").style(Style::default().fg(Color::Yellow).bold()),
+                Cell::from("Amount").style(Style::default().fg(Color::Yellow).bold()),
+                Cell::from("Expires").style(Style::default().fg(Color::Yellow).bold()),
+                Cell::from("Status").style(Style::default().fg(Color::Yellow).bold()),
+                Cell::from("Created").style(Style::default().fg(Color::Yellow).bold()),
+            ])
+        )
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!("🔐 Active Delegations ({})", app.delegations.len()))
+                .title_style(Style::default().fg(Color::Green).bold()),
+        )
+        .column_spacing(1);
+    f.render_widget(delegations_table, chunks[1]);
+
+    // Controls
+    let controls_text = if app.delegations.is_empty() {
+        "📋 No delegations yet.\n\n🔑 Controls: [d] Create Delegation | [s] Switch Role | [m] Sign Message | [r] Refresh"
+    } else {
+        "🔑 Controls: [d] Create Delegation | [e] Execute First | [k] Revoke First | [s] Switch Role | [m] Sign Message"
+    };
+    
+    let controls = Paragraph::new(controls_text)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("⌨️ Controls")
+                .title_style(Style::default().fg(Color::Magenta).bold()),
+        )
+        .wrap(Wrap { trim: true })
+        .style(Style::default().fg(Color::Gray));
+    f.render_widget(controls, chunks[2]);
+}
+
+/// Render delegation creation popup
+fn render_delegation_creation_popup(f: &mut Frame, app: &App) {
+    let popup_area = centered_rect(60, 50, f.size());
+    f.render_widget(Clear, popup_area);
+
+    let current_height = app.block_height;
+    let form_text = format!(
+        "🔐 CREATE DELEGATION\n\n\
+        Amount (sats): {}{}\n\n\
+        Recipient: {}{}\n\n\
+        Expiry (blocks from now): {}{}\n\n\
+        Current block height: {}\n\n\
+        📝 Use [Tab] to switch fields\n\
+        📤 Press [Enter] to create\n\
+        🚫 Press [Esc] to cancel",
+        app.delegation_amount_input,
+        if app.delegation_input_field == DelegationInputField::Amount { " ◄" } else { "" },
+        app.delegation_recipient_input,
+        if app.delegation_input_field == DelegationInputField::Recipient { " ◄" } else { "" },
+        app.delegation_expiry_input,
+        if app.delegation_input_field == DelegationInputField::Expiry { " ◄" } else { "" },
+        current_height,
+    );
+
+    let popup = Paragraph::new(form_text)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("🔐 Create Delegation")
+                .title_style(Style::default().fg(Color::Cyan).bold()),
+        )
+        .wrap(Wrap { trim: true })
+        .style(Style::default().fg(Color::White).bg(Color::DarkGray));
+
+    f.render_widget(popup, popup_area);
+}
+
+/// Render role selection popup
+fn render_role_selection_popup(f: &mut Frame, app: &App) {
+    let popup_area = centered_rect(50, 40, f.size());
+    f.render_widget(Clear, popup_area);
+
+    let roles_text = format!(
+        "🎭 SELECT ROLE\n\n\
+        [1] {} - Full access to all operations\n\
+        [2] {} - Can authorize delegations and operations\n\
+        [3] {} - Can execute delegated operations\n\
+        [4] {} - Read-only access to all information\n\n\
+        Current role: {}\n\n\
+        🔑 Press number to select role\n\
+        🚫 Press [Esc] to cancel",
+        Role::CEO.display_name(),
+        Role::Treasurer.display_name(),
+        Role::Operations.display_name(),
+        Role::Auditor.display_name(),
+        app.current_role.display_name(),
+    );
+
+    let popup = Paragraph::new(roles_text)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("🎭 Role Selection")
+                .title_style(Style::default().fg(Color::Magenta).bold()),
+        )
+        .wrap(Wrap { trim: true })
+        .style(Style::default().fg(Color::White).bg(Color::DarkGray));
+
+    f.render_widget(popup, popup_area);
+}
+
+/// Render message signing popup
+fn render_message_signing_popup(f: &mut Frame, app: &App) {
+    let popup_area = centered_rect(70, 60, f.size());
+    f.render_widget(Clear, popup_area);
+
+    let signature_text = if let Some(ref signature) = app.signed_message {
+        format!("\n✅ SIGNATURE:\n{}...{}", &signature[..40], &signature[signature.len()-40..])
+    } else {
+        "\n⏳ No signature yet".to_string()
+    };
+
+    let form_text = format!(
+        "📝 SIGN CUSTOM MESSAGE\n\n\
+        Message to sign:\n{}\n\n\
+        {}\n\n\
+        📝 Type your message\n\
+        📤 Press [Enter] to sign\n\
+        🚫 Press [Esc] to cancel",
+        app.message_to_sign,
+        signature_text,
+    );
+
+    let popup = Paragraph::new(form_text)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("📝 Message Signing")
+                .title_style(Style::default().fg(Color::Green).bold()),
+        )
+        .wrap(Wrap { trim: true })
+        .style(Style::default().fg(Color::White).bg(Color::DarkGray));
+
+    f.render_widget(popup, popup_area);
+}
+
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
     let popup_layout = Layout::default()
         .direction(Direction::Vertical)
