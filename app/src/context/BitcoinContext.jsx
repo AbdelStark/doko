@@ -1,7 +1,9 @@
 import React, { createContext, useContext, useEffect, useState } from 'react'
-import { BitcoinRPC, TransactionBuilder } from '../lib/bitcoin'
+import BitcoinRPC from '../lib/bitcoin/rpc'
+import MutinynetExplorer from '../lib/bitcoin/explorer'
+import BitcoinWallet from '../lib/bitcoin/wallet'
+import TransactionBuilder from '../lib/bitcoin/transaction'
 import storage from '../lib/storage/vault'
-import { BitcoinWallet } from '../lib/bitcoin'
 
 const BitcoinContext = createContext(null)
 
@@ -13,6 +15,7 @@ export const useBitcoin = () => {
 
 export function BitcoinProvider({ children }) {
   const [rpc, setRpc] = useState(null)
+  const [explorer, setExplorer] = useState(null)
   const walletName = import.meta.env.VITE_BITCOIN_WALLET_NAME || 'default'
   const [txBuilder, setTxBuilder] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -29,11 +32,25 @@ export function BitcoinProvider({ children }) {
 
   const init = async () => {
     await storage.init()
-    const rpcClient = new BitcoinRPC({ usePublicAPI: import.meta.env.VITE_USE_PUBLIC_API === 'true' })
+    
+    // Initialize RPC client for wallet operations
+    const rpcClient = new BitcoinRPC()
     setRpc(rpcClient)
     setTxBuilder(new TransactionBuilder(rpcClient))
-    const bal = await rpcClient.getWalletBalance()
-    setWalletBalance(bal)
+    
+    // Initialize Explorer client for address balance queries
+    const explorerClient = new MutinynetExplorer()
+    setExplorer(explorerClient)
+    
+    // Try to get wallet balance via RPC
+    try {
+      const bal = await rpcClient.getWalletBalance()
+      setWalletBalance(bal)
+    } catch (error) {
+      console.warn('Could not get wallet balance via RPC:', error.message)
+      setWalletBalance(0)
+    }
+    
     setLoading(false)
   }
 
@@ -53,13 +70,13 @@ export function BitcoinProvider({ children }) {
   }
 
   const getBalance = async address => {
-    if (!rpc) throw new Error('RPC not ready')
-    return rpc.getBalance(address)
+    if (!explorer) throw new Error('Explorer not ready')
+    return explorer.getBalance(address)
   }
 
   const getUTXOs = async address => {
-    if (!rpc) throw new Error('RPC not ready')
-    return rpc.getUTXOs(address)
+    if (!explorer) throw new Error('Explorer not ready')
+    return explorer.getUTXOs(address)
   }
 
   const buildTransaction = async ({ fromAddress, toAddress, amount, feeRate }) => {
@@ -75,10 +92,28 @@ export function BitcoinProvider({ children }) {
 
   const getNewAddress = label => rpc.getNewAddress(label)
 
-  const refreshBalance = async () => {
-    if (rpc) {
-      const bal = await rpc.getWalletBalance()
-      setWalletBalance(bal)
+  const refreshBalance = async (address) => {
+    try {
+      if (address) {
+        // For specific addresses, use explorer API (for vault/hot/cold addresses)
+        if (!explorer) throw new Error('Explorer not ready')
+        const bal = await explorer.getBalance(address)
+        return bal
+      } else {
+        // For wallet balance, use RPC
+        if (!rpc) throw new Error('RPC not ready')
+        const bal = await rpc.getWalletBalance()
+        setWalletBalance(bal)
+        return bal
+      }
+    } catch (error) {
+      console.error('Error refreshing balance:', error)
+      if (address) {
+        return { confirmed: 0, unconfirmed: 0, address }
+      } else {
+        setWalletBalance(0)
+        return 0
+      }
     }
   }
 

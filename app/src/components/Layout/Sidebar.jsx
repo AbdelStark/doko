@@ -6,6 +6,7 @@ const navLinks = [
   { to: '/wallet', label: 'Wallet' },
   { to: '/vaults', label: 'Vaults' },
   { to: '/transactions', label: 'Transactions' },
+  { to: '/settings', label: 'Settings' },
 ]
 
 export default function Sidebar() {

@@ -19,11 +19,11 @@ export default ({ mode }) => {
       dedupe: ['react', 'react-dom']
     },
     define: {
-      __RPC_URL__: JSON.stringify(env.RPC_URL || ''),
-      __RPC_PORT__: JSON.stringify(env.RPC_PORT || ''),
-      __RPC_USER__: JSON.stringify(env.RPC_USER || ''),
-      __RPC_PASSWORD__: JSON.stringify(env.RPC_PASSWORD || ''),
-      __RPC_WALLET__: JSON.stringify(env.RPC_WALLET || ''),
+      __RPC_URL__: JSON.stringify(env.VITE_RPC_URL || ''),
+      __RPC_PORT__: JSON.stringify(env.VITE_RPC_PORT || ''),
+      __RPC_USER__: JSON.stringify(env.VITE_RPC_USER || ''),
+      __RPC_PASSWORD__: JSON.stringify(env.VITE_RPC_PASSWORD || ''),
+      __RPC_WALLET__: JSON.stringify(env.VITE_RPC_WALLET || ''),
     },
     optimizeDeps: {
       esbuildOptions: {
@@ -49,9 +49,9 @@ export default ({ mode }) => {
       open: true,
       proxy: {
         '/wallet': {
-          target: `http://${env.RPC_URL}:${env.RPC_PORT}`,
+          target: `http://${env.VITE_RPC_URL}:${env.VITE_RPC_PORT}`,
           changeOrigin: true,
-          auth: `${env.RPC_USER}:${env.RPC_PASSWORD}`,
+          auth: `${env.VITE_RPC_USER}:${env.VITE_RPC_PASSWORD}`,
           secure: false,
         }
       }

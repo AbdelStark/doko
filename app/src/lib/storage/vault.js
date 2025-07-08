@@ -49,6 +49,14 @@ class VaultStorage {
   async getAllWallets() {
     return await this.db.getAll('wallets')
   }
+
+  async clearAll() {
+    const stores = ['vaults', 'wallets', 'transactions', 'keys', 'settings']
+    const tx = this.db.transaction(stores, 'readwrite')
+    
+    await Promise.all(stores.map(store => tx.objectStore(store).clear()))
+    await tx.done
+  }
 }
 
 export default new VaultStorage() 

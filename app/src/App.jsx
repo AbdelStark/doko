@@ -9,6 +9,7 @@ import { VaultProvider } from './context/VaultContext'
 import WalletManager from './components/Wallet/WalletManager'
 import VaultManager from './components/Vault/VaultManager'
 import TransactionHistory from './components/Transactions/TransactionHistory'
+import Settings from './components/Settings/Settings'
 
 function App() {
   return (
@@ -25,6 +26,7 @@ function App() {
                 <Route path="/wallet" element={<WalletManager />} />
                 <Route path="/vaults" element={<VaultManager />} />
                 <Route path="/transactions" element={<TransactionHistory />} />
+                <Route path="/settings" element={<Settings />} />
               </Routes>
             </main>
           </div>
