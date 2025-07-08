@@ -97,10 +97,10 @@ export function VaultProvider({ children }) {
 
   const updateVaultBalance = async (vaultId) => {
     try {
-      const vaultIndex = vaults.findIndex(v => v.id === vaultId)
-      if (vaultIndex === -1) throw new Error('Vault not found')
-      
-      const vault = vaults[vaultIndex]
+      // IMPORTANT: Load vault from storage to get the most up-to-date version
+      // Don't use vaults state array as it might be stale
+      const vault = await storage.getVault(vaultId)
+      if (!vault) throw new Error('Vault not found')
       
       if (vault.vaultAddress) {
         const [vaultBal, hotBal, coldBal] = await Promise.all([
@@ -115,21 +115,27 @@ export function VaultProvider({ children }) {
           hotBalance: hotBal.confirmed,
           coldBalance: coldBal.confirmed,
           updated: new Date().toISOString()
+          // IMPORTANT: Don't overwrite transactions here!
+          // Keep existing transactions array intact
         }
         
-        // Update status based on balances
+        // Update status based on balances (but don't add duplicate transactions)
         if (updatedVault.status === VaultStatus.CREATED && updatedVault.vaultBalance > 0) {
-          const stateManager = new VaultStateManager(updatedVault)
-          stateManager.updateStatus(VaultStatus.FUNDED, {
-            amount: updatedVault.vaultBalance
-          })
+          updatedVault.status = VaultStatus.FUNDED
+          // Don't use VaultStateManager here to avoid duplicate transactions
         }
+        
+        // Transactions are preserved from storage
         
         await storage.saveVault(updatedVault)
         
-        const newVaults = [...vaults]
-        newVaults[vaultIndex] = updatedVault
-        setVaults(newVaults)
+        // Update the vaults state array with the updated vault
+        const vaultIndex = vaults.findIndex(v => v.id === vaultId)
+        if (vaultIndex !== -1) {
+          const newVaults = [...vaults]
+          newVaults[vaultIndex] = updatedVault
+          setVaults(newVaults)
+        }
         
         return updatedVault
       }
@@ -139,6 +145,46 @@ export function VaultProvider({ children }) {
     }
   }
 
+  const cleanupVaultTransactions = (vault) => {
+    if (!vault.transactions || !Array.isArray(vault.transactions)) {
+      return []
+    }
+    
+    // Remove duplicates based on txid and keep only valid transactions
+    const seen = new Set()
+    const cleanTransactions = []
+    
+    for (const tx of vault.transactions) {
+      // Skip malformed transactions
+      if (!tx || typeof tx !== 'object' || !tx.txid || !tx.type || !tx.amount || !tx.timestamp) {
+        continue
+      }
+      
+      // Skip status-based transactions (these are not actual transactions)
+      if (tx.type === 'funded' || tx.type === 'triggered' || tx.type === 'completed') {
+        continue
+      }
+      
+      // Create unique key for deduplication
+      const uniqueKey = `${tx.txid}-${tx.type}-${vault.id}`
+      if (seen.has(uniqueKey)) {
+        continue
+      }
+      
+      // Ensure transaction has required fields and proper structure
+      if (tx.type && tx.amount && tx.timestamp && tx.txid) {
+        seen.add(uniqueKey)
+        cleanTransactions.push({
+          ...tx,
+          // Ensure explorerUrl is present if not already set
+          explorerUrl: tx.explorerUrl || `https://mutinynet.com/tx/${tx.txid}`
+        })
+      }
+    }
+    
+    return cleanTransactions
+  }
+
   const updateVaultWithFunding = async (vaultId, fundingData) => {
     try {
       const vaultIndex = vaults.findIndex(v => v.id === vaultId)
@@ -146,16 +192,21 @@ export function VaultProvider({ children }) {
       
       const vault = vaults[vaultIndex]
       
+      // Clean up existing transactions and add new one
+      const cleanedTransactions = cleanupVaultTransactions(vault)
+      
+      const newTransactions = [
+        ...cleanedTransactions,
+        ...(fundingData.transaction ? [fundingData.transaction] : [])
+      ]
+      
       const updatedVault = {
         ...vault,
         fundingTxid: fundingData.fundingTxid,
         fundingVout: fundingData.fundingVout,
         fundingAmount: fundingData.fundingAmount,
         status: VaultStatus.FUNDED,
-        transactions: [
-          ...(vault.transactions || []).filter(tx => tx.txid !== fundingData.fundingTxid), // Remove duplicates
-          ...(fundingData.transaction ? [fundingData.transaction] : [])
-        ],
+        transactions: newTransactions,
         updated: new Date().toISOString()
       }
       
@@ -313,6 +364,26 @@ export function VaultProvider({ children }) {
     }
   }
 
+  const cleanupAllVaults = async () => {
+    try {
+      const updatedVaults = []
+      for (const vault of vaults) {
+        const cleanedTransactions = cleanupVaultTransactions(vault)
+        const updatedVault = {
+          ...vault,
+          transactions: cleanedTransactions
+        }
+        await storage.saveVault(updatedVault)
+        updatedVaults.push(updatedVault)
+      }
+      setVaults(updatedVaults)
+      return true
+    } catch (error) {
+      console.error('Error cleaning up vaults:', error)
+      return false
+    }
+  }
+
   const value = { 
     vaults, 
     loading, 
@@ -325,6 +396,7 @@ export function VaultProvider({ children }) {
     triggerVault,
     withdrawHot,
     clawbackCold,
+    cleanupAllVaults,
     reload: load 
   }
   return <VaultContext.Provider value={value}>{children}</VaultContext.Provider>

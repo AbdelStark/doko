@@ -2,28 +2,51 @@ import React, { useState, useMemo } from 'react'
 import { useVaults } from '../../context/VaultContext'
 import { formatVaultBalance } from '../../lib/taproot'
 import Button from '../UI/Button'
+import toast from 'react-hot-toast'
 
 export default function TransactionHistory() {
-  const { vaults } = useVaults()
+  const { vaults, fetchBalances, cleanupAllVaults } = useVaults()
   const [filterType, setFilterType] = useState('all')
   const [filterStatus, setFilterStatus] = useState('all')
   const [sortBy, setSortBy] = useState('timestamp')
   const [sortOrder, setSortOrder] = useState('desc')
+  const [refreshing, setRefreshing] = useState(false)
 
   // Collect all transactions from all vaults
   const allTransactions = useMemo(() => {
     const transactions = []
-    vaults.forEach(vault => {
-      if (vault.transactions) {
-        vault.transactions.forEach(tx => {
+    const seenTxIds = new Set()
+    
+    vaults.forEach(vault => {      
+      if (vault.transactions && Array.isArray(vault.transactions)) {
+        vault.transactions.forEach((tx, index) => {
+          // Skip malformed transactions
+          if (!tx || !tx.txid || !tx.type || !tx.amount || !tx.timestamp) {
+            return
+          }
+          
+          // Skip status-based transactions (like 'funded', 'triggered')
+          if (tx.type === 'funded' || tx.type === 'triggered') {
+            return
+          }
+          
+          // Create unique key for deduplication
+          const uniqueKey = `${tx.txid}-${tx.type}-${vault.id}`
+          if (seenTxIds.has(uniqueKey)) {
+            return
+          }
+          
+          seenTxIds.add(uniqueKey)
           transactions.push({
             ...tx,
             vaultId: vault.id,
-            vaultName: vault.name
+            vaultName: vault.name,
+            uniqueKey // Add unique key for React rendering
           })
         })
       }
     })
+    
     return transactions
   }, [vaults])
 
@@ -153,8 +176,42 @@ export default function TransactionHistory() {
               </select>
             </div>
 
-            {/* Results Count */}
-            <div className="ml-auto">
+            {/* Refresh and Cleanup Buttons */}
+            <div className="ml-auto flex items-center gap-3">
+              <Button
+                onClick={async () => {
+                  setRefreshing(true)
+                  try {
+                    await fetchBalances()
+                    toast.success('Transactions refreshed')
+                  } catch (error) {
+                    toast.error('Failed to refresh transactions')
+                  } finally {
+                    setRefreshing(false)
+                  }
+                }}
+                disabled={refreshing}
+                className="bg-blue-500 text-white px-4 py-2 text-sm"
+              >
+                {refreshing ? '↻' : '↺'} Refresh
+              </Button>
+              <Button
+                onClick={async () => {
+                  setRefreshing(true)
+                  try {
+                    await cleanupAllVaults()
+                    toast.success('Transaction data cleaned up')
+                  } catch (error) {
+                    toast.error('Failed to cleanup transactions')
+                  } finally {
+                    setRefreshing(false)
+                  }
+                }}
+                disabled={refreshing}
+                className="bg-orange-500 text-white px-4 py-2 text-sm"
+              >
+                🧹 Cleanup
+              </Button>
               <p className="text-sm font-grotesk font-semibold text-gray-600">
                 {filteredAndSortedTransactions.length} transaction{filteredAndSortedTransactions.length !== 1 ? 's' : ''}
               </p>
@@ -167,7 +224,7 @@ export default function TransactionHistory() {
           {filteredAndSortedTransactions.length > 0 ? (
             <div className="space-y-3">
               {filteredAndSortedTransactions.map((tx, index) => (
-                <div key={tx.id || `tx-${index}`} className="border border-black p-4 bg-white hover:bg-gray-50 transition-colors">
+                <div key={tx.uniqueKey || tx.id || `tx-${tx.txid}-${index}`} className="border border-black p-4 bg-white hover:bg-gray-50 transition-colors">
                   <div className="flex justify-between items-start">
                     <div className="flex-1">
                       <div className="flex items-center gap-3 mb-2">
