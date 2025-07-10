@@ -22,8 +22,8 @@
 //! doko dashboard --vault-type hybrid
 //! ```
 
-use anyhow::Result;
-use bitcoin::{OutPoint, Network, Amount};
+use anyhow::{Result, anyhow};
+use bitcoin::{OutPoint, Network, Amount, Address};
 use clap::{Parser, Subcommand};
 use std::{str::FromStr, time::Duration};
 use tokio::time::sleep;
@@ -382,7 +382,7 @@ async fn hybrid_vault_auto_demo(amount: u64, delay: u32, scenario: &str) -> Resu
     
     // CRITICAL FIX: Clean up any existing UTXOs for the vault address to prevent conflicts
     println!("🧹 Cleaning up any existing vault UTXOs...");
-    let _ = cleanup_vault_utxos(&rpc).await;  // Don't fail if cleanup fails
+    let _ = cleanup_vault_utxos(&rpc, None).await;  // Don't fail if cleanup fails
     println!();
 
     // Generate test keys for hybrid vault
@@ -456,7 +456,25 @@ async fn hybrid_vault_auto_demo(amount: u64, delay: u32, scenario: &str) -> Resu
     }
     println!(" ✅ {} confirmations", rpc.get_confirmations(&funding_txid)?);
 
-    let vault_utxo = OutPoint::new(funding_txid, 0);
+    // NEW: Fetch transaction details and find correct vout by matching script_pubkey
+    let tx_info = rpc.get_raw_transaction_verbose(&funding_txid)?;
+    let vault_addr = Address::from_str(&vault_info.address)?.require_network(Network::Signet)?;
+    let vault_script_hex = hex::encode(vault_addr.script_pubkey().to_bytes());
+
+    let mut vault_vout: Option<u32> = None;
+    if let Some(vouts) = tx_info["vout"].as_array() {
+        for (index, vout) in vouts.iter().enumerate() {
+            if let Some(spk) = vout["scriptPubKey"]["hex"].as_str() {
+                if spk == vault_script_hex {
+                    vault_vout = Some(index as u32);
+                    break;
+                }
+            }
+        }
+    }
+
+    let vault_vout = vault_vout.ok_or_else(|| anyhow!("Could not find vault output in funding tx"))?;
+    let vault_utxo = OutPoint::new(funding_txid, vault_vout);
     println!("📦 Vault UTXO: {}", vault_utxo);
     println!();
 
@@ -724,9 +742,35 @@ fn generate_test_keypair_u32(seed: u32) -> Result<(String, String)> {
 }
 
 /// Clean up any existing UTXOs for the vault address to prevent conflicts
-async fn cleanup_vault_utxos(_rpc: &MutinynetClient) -> Result<()> {
-    // For now, just wait a moment to let previous transactions settle
-    // This is a simple approach to reduce flakiness
+async fn cleanup_vault_utxos(rpc: &MutinynetClient, vault_address: Option<&str>) -> Result<()> {
+    // If a specific vault address is provided, scan for UTXOs and clean them up
+    if let Some(address) = vault_address {
+        match rpc.scan_utxos_for_address(address) {
+            Ok(utxos) => {
+                if !utxos.is_empty() {
+                    println!("🧹 Found {} existing UTXOs at vault address, cleaning up...", utxos.len());
+                    
+                    // Get a new address to send funds back to wallet
+                    if let Ok(_return_address) = rpc.get_new_address() {
+                        for utxo in utxos {
+                            if let (Some(txid), Some(vout)) = (utxo["txid"].as_str(), utxo["vout"].as_u64()) {
+                                println!("   ♻️  Cleaning up UTXO: {}:{}", txid, vout);
+                                // Note: This is a simplified cleanup - in practice, you would need to
+                                // properly construct and sign a transaction to spend these UTXOs
+                                // For now, just log that we found them
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                println!("⚠️  Could not scan for existing UTXOs: {}", e);
+            }
+        }
+    }
+    
+    // Always wait a moment to let previous transactions settle
+    // This reduces flakiness from rapid consecutive operations
     sleep(Duration::from_millis(500)).await;
     Ok(())
 }

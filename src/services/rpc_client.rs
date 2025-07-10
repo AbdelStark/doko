@@ -120,4 +120,17 @@ impl MutinynetClient {
         Ok(result)
     }
 
+    /// Scan for UTXOs at a specific address
+    pub fn scan_utxos_for_address(&self, address: &str) -> VaultResult<Vec<serde_json::Value>> {
+        let scanobject = format!("addr({})", address);
+        let result: serde_json::Value = self.client.call("scantxoutset", &[serde_json::Value::String("start".to_string()), serde_json::Value::Array(vec![serde_json::Value::String(scanobject)])])
+            .map_err(|e| VaultError::Rpc { source: e })?;
+        
+        if let Some(unspents) = result["unspents"].as_array() {
+            Ok(unspents.clone())
+        } else {
+            Ok(vec![])
+        }
+    }
+
 }
