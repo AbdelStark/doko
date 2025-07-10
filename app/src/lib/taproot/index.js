@@ -1,8 +1,16 @@
-import { Tap, Address, Script } from '@cmdcode/tapscript'
-import * as ecc from '@noble/secp256k1'
+import { Tap, Address, Script, Tx, Signer } from '@cmdcode/tapscript'
+import * as noble_ecc from '@noble/secp256k1'
 import { sha256 } from '@noble/hashes/sha256'
 import * as bitcoin from 'bitcoinjs-lib'
 import { Buffer } from 'buffer'
+import * as ecc from 'tiny-secp256k1'
+import { ECPairFactory } from 'ecpair'
+
+// Initialize ECC for bitcoinjs-lib
+bitcoin.initEccLib(ecc)
+
+// Create ECPair factory
+const ECPair = ECPairFactory(ecc)
 
 // Use NUMS internal key for script-only contracts (BIP341 recommended)
 const NUMS = '0250929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0'
@@ -23,14 +31,14 @@ export const VaultStatus = {
 
 // Generate a random private key
 function generatePrivateKey() {
-  const privKey = ecc.utils.randomPrivateKey()
+  const privKey = noble_ecc.utils.randomPrivateKey()
   return Buffer.from(privKey).toString('hex')
 }
 
 // Convert private key to public key
 function getPublicKey(privKey) {
   const privKeyBytes = Buffer.from(privKey, 'hex')
-  const pubKey = ecc.getPublicKey(privKeyBytes, true)
+  const pubKey = noble_ecc.getPublicKey(privKeyBytes, true)
   return Buffer.from(pubKey).toString('hex')
 }
 
@@ -63,9 +71,22 @@ function computeCTVHash(txTemplate) {
     txTemplate.outputs.map(output => {
       // Write 64-bit value in little-endian format (compatible with browser Buffer)
       const valueBuffer = Buffer.alloc(8)
-      const value = BigInt(output.value)
-      valueBuffer.writeUInt32LE(Number(value & 0xffffffffn), 0)
-      valueBuffer.writeUInt32LE(Number(value >> 32n), 4)
+      const value = BigInt(output.value || 0)
+      
+      // Split into low and high 32-bit parts
+      const lowPart = Number(value & 0xffffffffn)
+      const highPart = Number(value >> 32n)
+      
+      // Debug logging
+      console.log('Output value:', output.value, 'BigInt:', value, 'Low:', lowPart, 'High:', highPart)
+      
+      // Check bounds for 32-bit integers
+      if (lowPart < 0 || lowPart > 0xffffffff || highPart < 0 || highPart > 0xffffffff) {
+        throw new Error(`Value out of 32-bit bounds: ${output.value}`)
+      }
+      
+      valueBuffer.writeUInt32LE(lowPart, 0)
+      valueBuffer.writeUInt32LE(highPart, 4)
       
       // Handle scriptPubKey - it could be a string, Buffer, or object
       let scriptPubKey
@@ -101,9 +122,11 @@ function computeCTVHash(txTemplate) {
 }
 
 // Create trigger transaction template
-function createTriggerTemplate(vaultUtxo, hotAddress, coldAddress, csvDelay) {
-  const hotScript = Script.fmt.encodeAddress(hotAddress)
-  const coldScript = Script.fmt.encodeAddress(coldAddress)
+function createTriggerTemplate(vaultUtxo, hotPubkey, coldCtvHash, csvDelay) {
+  const inputValue = vaultUtxo.value || 0
+  const outputValue = Math.max(0, inputValue - DEFAULT_FEE_SATS)
+  
+  console.log('Creating trigger template - Input value:', inputValue, 'Output value:', outputValue)
   
   return {
     version: 2,
@@ -114,8 +137,8 @@ function createTriggerTemplate(vaultUtxo, hotAddress, coldAddress, csvDelay) {
       sequence: 0xffffffff
     }],
     outputs: [{
-      value: vaultUtxo.value - DEFAULT_FEE_SATS,
-      scriptPubKey: createTriggerScript(hotScript, coldScript, csvDelay)
+      value: outputValue,
+      scriptPubKey: createTriggerScript(hotPubkey, coldCtvHash, csvDelay)
     }],
     inputIndex: 0
   }
@@ -137,7 +160,9 @@ function createTriggerScript(hotPubkey, coldCtvHash, csvDelay) {
     'OP_ENDIF'
   ]
   
-  return Script.encode(script)
+  const encoded = Script.encode(script)
+  // Script.encode returns a Buff object with .hex property
+  return Buffer.from(encoded.hex, 'hex')
 }
 
 // Create hot withdrawal template
@@ -153,8 +178,8 @@ function createHotWithdrawalTemplate(triggerUtxo, hotAddress, amount) {
       sequence: triggerUtxo.csvDelay || 4 // CSV delay
     }],
     outputs: [{
-      value: amount,
-      scriptPubKey: hotScript.hex || hotScript
+      value: amount - HOT_FEE_SATS,
+      scriptPubKey: Buffer.from(hotScript.hex, 'hex')
     }],
     inputIndex: 0
   }
@@ -173,8 +198,8 @@ function createColdClawbackTemplate(triggerUtxo, coldAddress, amount) {
       sequence: 0xffffffff
     }],
     outputs: [{
-      value: amount,
-      scriptPubKey: coldScript.hex || coldScript
+      value: amount - DEFAULT_FEE_SATS,
+      scriptPubKey: Buffer.from(coldScript.hex, 'hex')
     }],
     inputIndex: 0
   }
@@ -393,6 +418,179 @@ export function generateSimpleVault() {
   return { address, tapkey, cblock, script }
 }
 
+// Transaction signing and serialization utilities using bitcoinjs-lib
+// Sign vault trigger transaction (CTV covenant spend)
+function signTriggerTransaction(txTemplate, inputIndex, vault) {
+  try {
+    console.log('Creating PSBT for vault trigger transaction...')
+    
+    const network = bitcoin.networks.testnet
+    const psbt = new bitcoin.Psbt({ network })
+    
+    const input = txTemplate.inputs[inputIndex]
+    
+    console.log('Input for trigger transaction:', input)
+    console.log('Input scriptPubKey:', input.scriptPubKey, 'type:', typeof input.scriptPubKey)
+    
+    psbt.addInput({
+      hash: input.txid,
+      index: input.vout,
+      sequence: input.sequence,
+      witnessUtxo: {
+        value: BigInt(input.value),
+        script: Buffer.isBuffer(input.scriptPubKey) ? input.scriptPubKey : Buffer.from(input.scriptPubKey, 'hex')
+      },
+      tapLeafScript: [{
+        leafVersion: 0xc0,
+        script: Buffer.isBuffer(vault.vaultScript) ? vault.vaultScript : Buffer.from(vault.vaultScript),
+        controlBlock: Buffer.isBuffer(vault.cblock) ? vault.cblock : Buffer.from(vault.cblock)
+      }]
+    })
+    
+    txTemplate.outputs.forEach(output => {
+      psbt.addOutput({
+        value: BigInt(output.value),
+        script: output.scriptPubKey
+      })
+    })
+    
+    // Finalize CTV covenant spend (no signature required)
+    psbt.finalizeInput(inputIndex, () => {
+      const witness = [
+        Buffer.isBuffer(vault.vaultScript) ? vault.vaultScript : Buffer.from(vault.vaultScript),
+        Buffer.isBuffer(vault.cblock) ? vault.cblock : Buffer.from(vault.cblock)
+      ]
+      
+      return {
+        finalScriptWitness: bitcoin.script.witnessStackToScriptWitness(witness)
+      }
+    })
+    
+    return psbt.extractTransaction()
+  } catch (error) {
+    console.error('Error signing trigger transaction:', error)
+    throw error
+  }
+}
+
+// Sign hot withdrawal transaction (CSV + signature spend)
+function signHotWithdrawalTransaction(txTemplate, inputIndex, vault) {
+  try {
+    console.log('Creating PSBT for hot withdrawal transaction...')
+    
+    const network = bitcoin.networks.testnet
+    const psbt = new bitcoin.Psbt({ network })
+    
+    const input = txTemplate.inputs[inputIndex]
+    psbt.addInput({
+      hash: input.txid,
+      index: input.vout,
+      sequence: input.sequence, // CSV delay
+      witnessUtxo: {
+        value: BigInt(input.value),
+        script: Buffer.from(input.scriptPubKey, 'hex')
+      },
+      tapLeafScript: [{
+        leafVersion: 0xc0,
+        script: Buffer.isBuffer(vault.triggerScript) ? vault.triggerScript : Buffer.from(vault.triggerScript), // Trigger script (IF branch)
+        controlBlock: Buffer.isBuffer(vault.cblock) ? vault.cblock : Buffer.from(vault.cblock)
+      }]
+    })
+    
+    txTemplate.outputs.forEach(output => {
+      psbt.addOutput({
+        value: BigInt(output.value),
+        script: output.scriptPubKey
+      })
+    })
+    
+    // Sign with hot private key
+    const hotKey = ECPair.fromPrivateKey(Buffer.from(vault.hotPrivKey, 'hex'))
+    psbt.signInput(inputIndex, hotKey)
+    
+    psbt.finalizeInput(inputIndex)
+    
+    return psbt.extractTransaction()
+  } catch (error) {
+    console.error('Error signing hot withdrawal:', error)
+    throw error
+  }
+}
+
+// Sign cold clawback transaction (CTV covenant in ELSE branch)
+function signColdClawbackTransaction(txTemplate, inputIndex, vault) {
+  try {
+    console.log('Creating PSBT for cold clawback transaction...')
+    
+    const network = bitcoin.networks.testnet
+    const psbt = new bitcoin.Psbt({ network })
+    
+    const input = txTemplate.inputs[inputIndex]
+    psbt.addInput({
+      hash: input.txid,
+      index: input.vout,
+      sequence: input.sequence,
+      witnessUtxo: {
+        value: BigInt(input.value),
+        script: Buffer.from(input.scriptPubKey, 'hex')
+      },
+      tapLeafScript: [{
+        leafVersion: 0xc0,
+        script: Buffer.isBuffer(vault.triggerScript) ? vault.triggerScript : Buffer.from(vault.triggerScript), // Trigger script (ELSE branch)
+        controlBlock: Buffer.isBuffer(vault.cblock) ? vault.cblock : Buffer.from(vault.cblock)
+      }]
+    })
+    
+    txTemplate.outputs.forEach(output => {
+      psbt.addOutput({
+        value: BigInt(output.value),
+        script: output.scriptPubKey
+      })
+    })
+    
+    // Finalize cold clawback (CTV covenant, no signature needed)
+    psbt.finalizeInput(inputIndex, () => {
+      const witness = [
+        Buffer.from('00', 'hex'), // Push 0 to take ELSE branch
+        Buffer.isBuffer(vault.triggerScript) ? vault.triggerScript : Buffer.from(vault.triggerScript),
+        Buffer.isBuffer(vault.cblock) ? vault.cblock : Buffer.from(vault.cblock)
+      ]
+      
+      return {
+        finalScriptWitness: bitcoin.script.witnessStackToScriptWitness(witness)
+      }
+    })
+    
+    return psbt.extractTransaction()
+  } catch (error) {
+    console.error('Error signing cold clawback:', error)
+    throw error
+  }
+}
+
+function serializeTransaction(tx) {
+  try {
+    // Use bitcoinjs-lib serialization
+    const hex = tx.toHex()
+    const txid = tx.getId()
+    
+    console.log('Transaction serialized:', { hex, txid })
+    
+    return { hex, txid }
+  } catch (error) {
+    console.error('Error serializing transaction:', error)
+    throw error
+  }
+}
+
+function computeTxId(txHex) {
+  // Compute transaction ID from hex (double SHA256)
+  const txBytes = Buffer.from(txHex, 'hex')
+  const hash1 = sha256(txBytes)
+  const hash2 = sha256(hash1)
+  return Buffer.from(hash2).reverse().toString('hex')
+}
+
 // Vault transaction builders
 export class VaultTransactionBuilder {
   constructor(vault) {
@@ -403,8 +601,8 @@ export class VaultTransactionBuilder {
   createTriggerTransaction(vaultUtxo) {
     const template = createTriggerTemplate(
       vaultUtxo,
-      this.vault.hotAddress,
-      this.vault.coldAddress,
+      this.vault.hotPubKey,
+      this.vault.coldCtvHash,
       this.vault.csvDelay
     )
     
@@ -416,11 +614,41 @@ export class VaultTransactionBuilder {
       'OP_CHECKTEMPLATEVERIFY'
     ]
     
+    // Add vault input scriptPubKey for signing
+    const vaultScriptPubKey = Address.toScriptPubKey(this.vault.vaultAddress)
+    console.log('VaultScriptPubKey:', vaultScriptPubKey, 'type:', typeof vaultScriptPubKey)
+    template.inputs[0].scriptPubKey = vaultScriptPubKey.hex || Buffer.from(vaultScriptPubKey).toString('hex')
+    template.inputs[0].value = vaultUtxo.value
+    
     return {
       template,
       ctvHash: ctvHash.toString('hex'),
       vaultScript,
       estimatedFee: DEFAULT_FEE_SATS
+    }
+  }
+  
+  // Sign and serialize trigger transaction
+  signTriggerTransaction(triggerTx) {
+    try {
+      // Sign the transaction using bitcoinjs-lib PSBT
+      const signedTx = signTriggerTransaction(
+        triggerTx.template,
+        0, // input index
+        this.vault // pass the entire vault object
+      )
+      
+      // Serialize to hex for broadcasting
+      const serialized = serializeTransaction(signedTx)
+      
+      return {
+        signedTx,
+        hex: serialized.hex,
+        txid: serialized.txid
+      }
+    } catch (error) {
+      console.error('Error signing trigger transaction:', error)
+      throw error
     }
   }
   
@@ -432,10 +660,47 @@ export class VaultTransactionBuilder {
       amount
     )
     
+    // Set CSV delay in sequence field for hot withdrawal
+    template.inputs[0].sequence = this.vault.csvDelay
+    
     return {
       template,
       estimatedFee: DEFAULT_FEE_SATS,
       csvDelay: this.vault.csvDelay
+    }
+  }
+  
+  // Sign hot withdrawal transaction (uses hot key + CSV delay)
+  signHotWithdrawal(hotTx, triggerUtxo) {
+    try {
+      // Update template with trigger UTXO details
+      const template = {
+        ...hotTx.template,
+        inputs: [{
+          ...hotTx.template.inputs[0],
+          scriptPubKey: Buffer.isBuffer(this.vault.triggerScript) ? this.vault.triggerScript.toString('hex') : this.vault.triggerScript, // Use trigger script
+          value: triggerUtxo.value
+        }]
+      }
+      
+      // Sign with hot private key using the IF branch of trigger script
+      const signedTx = signHotWithdrawalTransaction(
+        template,
+        0, // input index
+        this.vault // pass the entire vault object
+      )
+      
+      // Serialize to hex for broadcasting
+      const serialized = serializeTransaction(signedTx)
+      
+      return {
+        signedTx,
+        hex: serialized.hex,
+        txid: serialized.txid
+      }
+    } catch (error) {
+      console.error('Error signing hot withdrawal:', error)
+      throw error
     }
   }
   
@@ -450,6 +715,40 @@ export class VaultTransactionBuilder {
     return {
       template,
       estimatedFee: DEFAULT_FEE_SATS
+    }
+  }
+  
+  // Sign cold clawback transaction (uses CTV covenant in ELSE branch)
+  signColdClawback(coldTx, triggerUtxo) {
+    try {
+      // Update template with trigger UTXO details
+      const template = {
+        ...coldTx.template,
+        inputs: [{
+          ...coldTx.template.inputs[0],
+          scriptPubKey: Buffer.isBuffer(this.vault.triggerScript) ? this.vault.triggerScript.toString('hex') : this.vault.triggerScript, // Use trigger script
+          value: triggerUtxo.value
+        }]
+      }
+      
+      // For cold clawback, we use the ELSE branch with CTV covenant
+      const signedTx = signColdClawbackTransaction(
+        template,
+        0, // input index
+        this.vault // pass the entire vault object
+      )
+      
+      // Serialize to hex for broadcasting
+      const serialized = serializeTransaction(signedTx)
+      
+      return {
+        signedTx,
+        hex: serialized.hex,
+        txid: serialized.txid
+      }
+    } catch (error) {
+      console.error('Error signing cold clawback:', error)
+      throw error
     }
   }
 }

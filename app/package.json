@@ -15,9 +15,10 @@
     "axios": "^1.6.2",
     "bip32": "^4.0.0",
     "bip39": "^3.1.0",
-    "bitcoinjs-lib": "^6.1.5",
+    "bitcoinjs-lib": "^6.1.7",
     "buffer": "^6.0.3",
     "date-fns": "^3.0.6",
+    "ecpair": "^3.0.0",
     "events": "^3.3.0",
     "framer-motion": "^10.16.16",
     "idb": "^8.0.0",
@@ -26,7 +27,10 @@
     "react-dom": "^18.2.0",
     "react-hot-toast": "^2.4.1",
     "react-router-dom": "^6.21.0",
-    "uuid": "^9.0.1"
+    "tiny-secp256k1": "^2.2.4",
+    "uuid": "^9.0.1",
+    "vite-plugin-top-level-await": "^1.5.0",
+    "vite-plugin-wasm": "^3.5.0"
   },
   "devDependencies": {
     "@esbuild-plugins/node-globals-polyfill": "^0.2.3",

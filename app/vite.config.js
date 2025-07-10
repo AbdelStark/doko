@@ -3,12 +3,14 @@ import react from '@vitejs/plugin-react'
 import { NodeGlobalsPolyfillPlugin } from '@esbuild-plugins/node-globals-polyfill'
 import { NodeModulesPolyfillPlugin } from '@esbuild-plugins/node-modules-polyfill'
 import rollupNodePolyFill from 'rollup-plugin-polyfill-node'
+import wasm from 'vite-plugin-wasm'
+import topLevelAwait from 'vite-plugin-top-level-await'
 
 export default ({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
 
   return defineConfig({
-    plugins: [react()],
+    plugins: [react(), wasm(), topLevelAwait()],
     resolve: {
       alias: {
         buffer: 'rollup-plugin-node-polyfills/polyfills/buffer-es6',
@@ -26,6 +28,7 @@ export default ({ mode }) => {
       __RPC_WALLET__: JSON.stringify(env.VITE_RPC_WALLET || ''),
     },
     optimizeDeps: {
+      exclude: ['tiny-secp256k1'],
       esbuildOptions: {
         define: {
           global: 'globalThis',
