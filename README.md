@@ -237,6 +237,20 @@ cargo run -- dashboard --vault-type hybrid
 
 Monitors chain, broadcasts txs, tracks balances. Works on Mutinynet.
 
+## ⚙️ Configuration
+
+To run the demos and dashboard, configure the RPC connection via environment variables. Create a `.env` file in the project root with the following (defaults shown):
+
+```
+RPC_URL=127.0.0.1
+RPC_PORT=38332
+RPC_USER=user
+RPC_PASSWORD=password
+RPC_WALLET=vault_manager_wallet
+```
+
+These connect to a local Mutinynet node. Adjust as needed for your setup. The project loads these using dotenv.
+
 ---
 
 ## 📄 License

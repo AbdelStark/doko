@@ -33,6 +33,9 @@ bitcoincore-rpc = "0.19"
 sha2 = "0.10"
 hex = "0.4"
 
+# Nostr functionality
+nostr = "0.39.0"
+
 # CLI and TUI
 clap = { version = "4.4", features = ["derive"] }
 ratatui = "0.29"

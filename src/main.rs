@@ -36,13 +36,14 @@ mod vaults;
 
 use config::vault as vault_config;
 use services::MutinynetClient;
-use vaults::{HybridAdvancedVault, HybridVaultConfig, TaprootVault};
+use vaults::{HybridAdvancedVault, HybridVaultConfig, NostrVault, TaprootVault};
 
 /// Vault implementation type
 #[derive(Clone, Debug, clap::ValueEnum)]
 pub enum VaultType {
     Simple,
     Hybrid,
+    Nostr,
 }
 
 impl FromStr for VaultType {
@@ -51,6 +52,7 @@ impl FromStr for VaultType {
         match s.to_lowercase().as_str() {
             "simple" => Ok(VaultType::Simple),
             "hybrid" => Ok(VaultType::Hybrid),
+            "nostr" => Ok(VaultType::Nostr),
             _ => Err(format!("Invalid vault type: {}", s)),
         }
     }
@@ -61,6 +63,7 @@ impl std::fmt::Display for VaultType {
         match self {
             VaultType::Simple => write!(f, "simple"),
             VaultType::Hybrid => write!(f, "hybrid"),
+            VaultType::Nostr => write!(f, "nostr"),
         }
     }
 }
@@ -124,6 +127,10 @@ async fn main() -> Result<()> {
                     println!("📁 Transcript saved to ./transcripts/ directory");
                 }
             }
+            VaultType::Nostr => {
+                println!("🚧 Nostr vault TUI not implemented yet. Use auto-demo instead:");
+                println!("   doko auto-demo --vault-type nostr");
+            }
         },
     }
 
@@ -142,6 +149,7 @@ async fn auto_demo(
     match vault_type {
         VaultType::Simple => simple_vault_auto_demo(amount, delay, scenario).await,
         VaultType::Hybrid => hybrid_vault_auto_demo(amount, delay, scenario).await,
+        VaultType::Nostr => nostr_vault_auto_demo(amount, scenario).await,
     }
 }
 
@@ -858,5 +866,139 @@ async fn cleanup_vault_utxos(rpc: &MutinynetClient, vault_address: Option<&str>)
     // Always wait a moment to let previous transactions settle
     // This reduces flakiness from rapid consecutive operations
     sleep(Duration::from_millis(500)).await;
+    Ok(())
+}
+
+async fn nostr_vault_auto_demo(amount: u64, _scenario: &str) -> Result<()> {
+    println!("🏦 DOKO NOSTR VAULT DEMO (CSFS + Nostr Signatures)");
+    println!("═══════════════════════════════════════════════════════");
+    println!("Onchain Nostr Event Signature Verification with CSFS");
+    println!();
+
+    // Connect to Mutinynet
+    let rpc = MutinynetClient::new()?;
+    println!(
+        "🔌 Connecting to Mutinynet... ✅ Connected to wallet: {}",
+        rpc.get_wallet_name()
+    );
+    println!(
+        "📡 Network: signet | Block Height: {}",
+        rpc.get_block_count()?
+    );
+    println!();
+
+    // Create Nostr vault
+    println!("┌─────────────────────────────────────────────────────────────┐");
+    println!("│                STEP 1: CREATE NOSTR VAULT                   │");
+    println!("└─────────────────────────────────────────────────────────────┘");
+    println!();
+
+    let vault = NostrVault::new(amount)?;
+    println!("🏗️  Creating Nostr vault ({} sats)... ✅", amount);
+    println!("📍 Vault Address: {}", vault.get_vault_address()?);
+    println!("🎯 Destination:   {}", vault.get_destination_address()?);
+    println!();
+
+    // Display Nostr event details
+    println!("📋 Nostr Event Details:");
+    let event = vault.get_nostr_event()?;
+    println!("   📝 Event ID: {}", event.id);
+    println!("   🔑 Pubkey: {}", vault.nostr_pubkey);
+    println!("   📄 Content: {}", event.content);
+    println!("   ✅ Signature Valid: {}", vault.verify_signature()?);
+    println!("   🔍 Signature: {}", vault.expected_signature);
+    println!("   📏 Signature Length: {} bytes", hex::decode(&vault.expected_signature).unwrap().len());
+    println!("   📏 Pubkey Length: {} bytes", hex::decode(&vault.nostr_pubkey).unwrap().len());
+    println!("   🔍 Event Hash: {}", hex::encode(event.id.as_bytes()));
+    println!();
+
+    // Fund vault
+    println!("💰 Funding Nostr vault with {} sats...", amount);
+    let funding_txid = rpc.fund_address(&vault.get_vault_address()?, amount as f64 / 100_000_000.0)?;
+    println!(" ✅ TXID: {}", funding_txid);
+
+    // Wait for confirmation
+    print!("⏳ Waiting for confirmation");
+    while rpc.get_confirmations(&funding_txid)? == 0 {
+        print!(".");
+        std::io::Write::flush(&mut std::io::stdout())?;
+        sleep(Duration::from_secs(3)).await;
+    }
+    println!(
+        " ✅ {} confirmations",
+        rpc.get_confirmations(&funding_txid)?
+    );
+
+    // Fetch transaction details and find correct vout by matching script_pubkey
+    let tx_info = rpc.get_raw_transaction_verbose(&funding_txid)?;
+    let vault_addr = Address::from_str(&vault.get_vault_address()?)?.require_network(Network::Signet)?;
+    let vault_script_hex = hex::encode(vault_addr.script_pubkey().to_bytes());
+
+    let mut vault_vout: Option<u32> = None;
+    if let Some(vouts) = tx_info["vout"].as_array() {
+        for (index, vout) in vouts.iter().enumerate() {
+            if let Some(spk) = vout["scriptPubKey"]["hex"].as_str() {
+                if spk == vault_script_hex {
+                    vault_vout = Some(index as u32);
+                    break;
+                }
+            }
+        }
+    }
+
+    let vault_vout =
+        vault_vout.ok_or_else(|| anyhow!("Could not find vault output in funding tx"))?;
+    let vault_utxo = OutPoint::new(funding_txid, vault_vout);
+    println!("📦 Vault UTXO: {}", vault_utxo);
+    println!();
+
+    // Execute spending
+    println!("┌─────────────────────────────────────────────────────────────┐");
+    println!("│            STEP 2: SPEND WITH NOSTR SIGNATURE               │");
+    println!("└─────────────────────────────────────────────────────────────┘");
+    println!();
+
+    println!("🔏 EXECUTING NOSTR SIGNATURE VERIFICATION!");
+    println!("📝 Verifying Nostr event signature onchain using CSFS");
+    println!();
+
+    println!("🔨 Creating spending transaction...");
+    let spending_tx = vault.create_spending_tx(vault_utxo)?;
+    let spending_txid = rpc.send_raw_transaction(&spending_tx)?;
+    println!(" ✅ TXID: {}", spending_txid);
+    println!("📡 Broadcasting spending transaction... ✅ Broadcast successful");
+
+    // Wait for confirmation
+    print!("⏳ Waiting for spending confirmation");
+    while rpc.get_confirmations(&spending_txid)? == 0 {
+        print!(".");
+        std::io::Write::flush(&mut std::io::stdout())?;
+        sleep(Duration::from_secs(3)).await;
+    }
+    println!(
+        " ✅ {} confirmations",
+        rpc.get_confirmations(&spending_txid)?
+    );
+    println!();
+
+    println!("🛡️  NOSTR SIGNATURE VERIFICATION COMPLETED");
+    println!(
+        "   💰 Amount: {} sats",
+        amount - vault_config::DEFAULT_FEE_SATS
+    );
+    println!("   📍 Address: {}", vault.get_destination_address()?);
+    println!("   🔏 Nostr signature verified onchain via CSFS!");
+    println!();
+
+    println!("🎉 NOSTR VAULT DEMO COMPLETED SUCCESSFULLY!");
+    println!("───────────────────────────────────────────");
+    println!("✅ Nostr vault created and funded");
+    println!("✅ Nostr event signature generated");
+    println!("✅ CSFS signature verification successful");
+    println!("✅ Funds transferred to destination");
+    println!();
+    println!("🔍 View transactions on explorer:");
+    println!("   https://mutinynet.com");
+
     Ok(())
 }
