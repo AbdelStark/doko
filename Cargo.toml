@@ -9,7 +9,7 @@ repository = "https://github.com/AbdelStark/doko"
 homepage = "https://github.com/AbdelStark/doko"
 documentation = "https://docs.rs/doko"
 readme = "README.md"
-keywords = ["bitcoin", "vault", "covenant", "ctv", "csfs", "taproot", "signet"]
+keywords = ["bitcoin", "vault", "covenant", "ctv", "csfs", "taproot"]
 categories = ["cryptography", "command-line-utilities"]
 exclude = [
     "target/",
