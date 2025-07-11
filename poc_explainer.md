@@ -1,13 +1,13 @@
 # Doko Vault: A Deep Dive into CTV+CSFS Covenant Construction
 
-*A proof-of-concept implementation combining CheckTemplateVerify covenants with CheckSigFromStack delegation for production-ready Bitcoin vault architecture*
+_A proof-of-concept implementation combining CheckTemplateVerify covenants with CheckSigFromStack delegation for production-ready Bitcoin vault architecture_
 
 ## The Problem: Why Vaults Matter
 
 Bitcoin's script system allows for sophisticated custody arrangements, but traditional multisig falls short for institutional treasury management. Consider a corporation holding significant Bitcoin reserves:
 
 - **Hot wallets** enable fast operations but expose funds to compromise
-- **Cold storage** provides security but creates operational friction  
+- **Cold storage** provides security but creates operational friction
 - **Traditional multisig** requires coordinating multiple parties for every transaction
 - **Emergency scenarios** need rapid response without compromising long-term security
 
@@ -49,20 +49,20 @@ CTV works by committing to the **exact structure** of a future transaction. When
 fn compute_ctv_hash(&self) -> Result<[u8; 32]> {
     let template = self.create_trigger_tx_template()?;
     let mut buffer = Vec::new();
-    
+
     // BIP-119 components
     template.version.consensus_encode(&mut buffer)?;           // nVersion
     template.lock_time.consensus_encode(&mut buffer)?;         // nLockTime
     (template.input.len() as u32).consensus_encode(&mut buffer)?; // num_inputs
-    
+
     // Hash all input sequences
     let sequences_hash = sha256::Hash::hash(&sequences_data);
     buffer.extend_from_slice(&sequences_hash[..]);
-    
+
     // Hash all outputs (value + scriptPubKey)
     let outputs_hash = sha256::Hash::hash(&outputs_data);
     buffer.extend_from_slice(&outputs_hash[..]);
-    
+
     let hash = sha256::Hash::hash(&buffer);
     Ok(hash.to_byte_array())
 }
@@ -77,7 +77,7 @@ The CTV script is elegantly simple:
 ```rust
 fn ctv_vault_deposit_script(&self) -> Result<ScriptBuf> {
     let ctv_hash = self.compute_ctv_hash()?;
-    
+
     Ok(Builder::new()
         .push_slice(ctv_hash)     // 32-byte template commitment
         .push_opcode(OP_NOP4)     // OP_CHECKTEMPLATEVERIFY
@@ -95,7 +95,7 @@ The trigger output uses a conditional script enabling two spending paths:
 fn vault_trigger_script(&self) -> Result<ScriptBuf> {
     let hot_xonly = XOnlyPublicKey::from_str(&self.hot_pubkey)?;
     let cold_ctv_hash = self.compute_cold_ctv_hash()?;
-    
+
     Ok(Builder::new()
         .push_opcode(OP_IF)
             .push_int(self.csv_delay as i64)    // 4 blocks delay
@@ -133,8 +133,9 @@ pub fn create_delegation_message(&self, amount: Amount, recipient: &str, expiry_
 ```
 
 This structured message contains:
+
 - **Amount**: Maximum spendable amount
-- **Recipient**: Authorized destination address  
+- **Recipient**: Authorized destination address
 - **Expiry**: Block height limit for replay protection
 - **Vault**: Source vault address for context
 
@@ -147,11 +148,11 @@ pub fn sign_message(&self, message: &[u8], private_key_hex: &str) -> Result<Stri
     let private_key_bytes = hex::decode(private_key_hex)?;
     let secret_key = SecretKey::from_slice(&private_key_bytes)?;
     let keypair = Keypair::from_secret_key(&self.secp, &secret_key);
-    
+
     let message_hash = sha256::Hash::hash(message);
     let message_obj = Message::from_digest_slice(message_hash.as_byte_array())?;
     let signature = self.secp.sign_schnorr(&message_obj, &keypair);
-    
+
     Ok(hex::encode(signature.as_ref()))
 }
 ```
@@ -167,6 +168,7 @@ fn create_csfs_delegation_script(&self) -> VaultResult<ScriptBuf> {
 ```
 
 When spending via CSFS, the witness must provide:
+
 - **Signature**: Schnorr signature over the message hash
 - **Message hash**: SHA256 of the delegation message
 - **Public key**: Treasurer's public key for verification
@@ -183,11 +185,11 @@ The vault uses a **balanced Taproot tree** with both paths at depth 1:
 pub fn create_vault_spend_info(&self) -> Result<TaprootSpendInfo> {
     let nums_key = Self::nums_point()?;  // No private key
     let (ctv_script, csfs_script) = self.get_canonical_scripts()?;
-    
+
     let taproot_builder = TaprootBuilder::new()
         .add_leaf(1, ctv_script)?     // CTV covenant path
         .add_leaf(1, csfs_script)?;   // CSFS delegation path
-    
+
     let spend_info = taproot_builder.finalize(&self.secp, nums_key)?;
     Ok(spend_info)
 }
@@ -214,12 +216,14 @@ This ensures the vault can **only** be spent through the script paths - there's 
 Each spending path requires a different witness structure:
 
 **CTV Covenant spending**:
+
 ```rust
 witness.push(deposit_script.to_bytes());    // Script
 witness.push(control_block.serialize());    // Merkle proof
 ```
 
 **CSFS Delegation spending**:
+
 ```rust
 witness.push(&signature_bytes);             // Delegation signature
 witness.push(message_hash.as_byte_array()); // Message hash
@@ -247,12 +251,14 @@ witness.push(control_block.serialize());    // Merkle proof
 ### Security Properties
 
 **Multi-layer Protection**:
+
 - CTV covenants prevent unauthorized transaction structures
 - CSV timelocks provide recovery windows for hot withdrawals
 - CSFS delegation enables flexible authorization without key exposure
 - Taproot privacy hides unused script paths
 
 **Audit and Compliance**:
+
 - All vault operations create permanent blockchain records
 - Delegation messages provide clear authorization trails
 - Time-bounded permissions prevent indefinite access
@@ -311,6 +317,7 @@ cargo run -- auto-demo --vault-type hybrid --scenario delegated --amount 10000
 ```
 
 This creates a complete end-to-end workflow:
+
 1. Generate unique keys for each role
 2. Create and fund the vault
 3. Execute CSFS delegation
@@ -320,6 +327,7 @@ This creates a complete end-to-end workflow:
 ### Live Network Testing
 
 The implementation runs on **Mutinynet signet**, providing:
+
 - Real covenant opcode support (OP_CTV, OP_CSFS)
 - Actual transaction broadcasting and confirmation
 - Network-level validation of covenant logic
@@ -339,6 +347,7 @@ This implementation demonstrates that **simple covenant primitives** can enable 
 ### Scaling Considerations
 
 The architecture scales well for institutional use:
+
 - **Batching**: Multiple delegations can be processed simultaneously
 - **Hierarchical**: Delegation chains can create complex authorization trees
 - **Efficient**: Taproot reduces on-chain footprint
@@ -347,6 +356,7 @@ The architecture scales well for institutional use:
 ### Security Model
 
 The security model relies on:
+
 - **Cryptographic commitments** rather than trusted parties
 - **Blockchain consensus** for covenant enforcement
 - **Time-based controls** for recovery mechanisms
@@ -357,6 +367,7 @@ The security model relies on:
 ### Enhanced Delegation
 
 CSFS could support more sophisticated delegation patterns:
+
 - **Hierarchical delegation**: Treasurer → Manager → Operations
 - **Conditional delegation**: Amount limits based on time or events
 - **Revocable delegation**: Time-based or explicit revocation mechanisms
@@ -364,6 +375,7 @@ CSFS could support more sophisticated delegation patterns:
 ### Cross-Chain Applications
 
 The covenant patterns could extend to:
+
 - **Lightning Network**: Covenant-based channel factories
 - **Sidechains**: Trustless pegging mechanisms
 - **DeFi**: Decentralized custody solutions
@@ -371,6 +383,7 @@ The covenant patterns could extend to:
 ### Protocol Integration
 
 As covenant proposals advance:
+
 - **OP_CTV**: BIP-119 activation would enable mainnet deployment
 - **OP_CSFS**: Delegation primitives for advanced script construction
 - **APO/ANYPREVOUT**: Additional covenant expressiveness
@@ -385,4 +398,4 @@ The code is [open source](https://github.com/AbdelStark/doko) and running live o
 
 ---
 
-*This analysis covers the proof-of-concept implementation as of January 2025. The covenant opcodes (OP_CTV, OP_CSFS) are available on Mutinynet signet but not yet activated on Bitcoin mainnet. The implementation demonstrates the technical feasibility and operational benefits of covenant-based vault systems.*
+_This analysis covers the proof-of-concept implementation as of January 2025. The covenant opcodes (OP_CTV, OP_CSFS) are available on Mutinynet signet but not yet activated on Bitcoin mainnet. The implementation demonstrates the technical feasibility and operational benefits of covenant-based vault systems._
