@@ -1,12 +1,27 @@
-# Doko: Bitcoin Vault with CTV and CSFS
+<div align="center">
+  <img src="resources/img/doko.png" alt="Doko Logo" width="200"/>
+  
+  # Doko
+  
+  **Bitcoin Vault with CTV and CSFS**
+  
+  ![Rust](https://img.shields.io/badge/rust-%23000000.svg?style=for-the-badge&logo=rust&logoColor=white)
+  ![Bitcoin](https://img.shields.io/badge/Bitcoin-FF9900?style=for-the-badge&logo=bitcoin&logoColor=white)
+  ![MIT License](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)
+  
+  *Bitcoin vaults using Taproot (P2TR), OP_CHECKTEMPLATEVERIFY (CTV) for covenants, and OP_CHECKSIGFROMSTACK (CSFS) for spending delegation.*
+  
+  **Built for Mutinynet signet with CTV and CSFS activation**
+  
+  > ⚠️ **Disclaimer**: This is an experimental project for educational purposes.
+  
+</div>
 
-Doko implements Bitcoin vaults using Taproot (P2TR), OP_CHECKTEMPLATEVERIFY (CTV) for covenants, and OP_CHECKSIGFROMSTACK (CSFS) for spending delegation. It's built for Mutinynet signet, which activates CTV and CSFS.
+---
 
-> Disclaimer: This is an experimental project for educational purposes.
+## 🏗️ How It Works
 
-## How It Works
-
-### Basic Vault (CTV-Only)
+### 🔒 Basic Vault (CTV-Only)
 
 Funds go into a vault UTXO locked by CTV to a specific "trigger" tx template. Anyone can broadcast that trigger tx, moving funds to a conditional UTXO with two paths:
 
@@ -106,7 +121,7 @@ OP_ENDIF
 
 In the implementation we use a NUMS internal key to force script spends only.
 
-### Hybrid Vault (CTV + CSFS)
+### 🔀 Hybrid Vault (CTV + CSFS)
 
 Adds a CSFS path for delegation alongside CTV. Vault UTXO has a two-leaf Taproot tree:
 
@@ -177,7 +192,7 @@ Hybrid Vault (P2TR)
     └── Message signature verification
 ```
 
-## Transaction Details
+## 📋 Transaction Details
 
 1. **Setup**: Gen hot/cold keys. Compute trigger and cold tx templates. Build Taproot addresses.
 
@@ -191,9 +206,9 @@ Hybrid Vault (P2TR)
 
 6. **CSFS delegate** (hybrid): Spend vault directly with CSFS-verified sig. No trigger needed.
 
-## Try it
+## 🚀 Try it
 
-CLI demos:
+### CLI Demos
 
 ```bash
 # See available commands: cargo run -- auto-demo --help
@@ -203,7 +218,7 @@ cargo run -- auto-demo --vault-type hybrid --scenario cold-recovery
 cargo run -- auto-demo --vault-type hybrid --scenario hot-withdrawal
 ```
 
-TUI dashboard:
+### TUI Dashboard
 
 ```bash
 # TUI dashboard to monitor vaults
@@ -217,6 +232,8 @@ cargo run -- dashboard --vault-type hybrid
 
 Monitors chain, broadcasts txs, tracks balances. Works on Mutinynet.
 
-## License
+---
+
+## 📄 License
 
 This project is licensed under the [MIT License](LICENSE).
