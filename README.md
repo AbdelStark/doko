@@ -5,9 +5,9 @@
   
   **Bitcoin Vault with CTV and CSFS**
   
-  ![Rust](https://img.shields.io/badge/rust-%23000000.svg?style=for-the-badge&logo=rust&logoColor=white)
-  ![Bitcoin](https://img.shields.io/badge/Bitcoin-FF9900?style=for-the-badge&logo=bitcoin&logoColor=white)
-  ![MIT License](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)
+  [![Rust](https://img.shields.io/badge/rust-%23000000.svg?style=for-the-badge&amp;logo=rust&amp;logoColor=white)](https://crates.io/crates/bitcoin-doko)
+  [![Bitcoin](https://img.shields.io/badge/Bitcoin-FF9900?style=for-the-badge&amp;logo=bitcoin&amp;logoColor=white)](https://bitcoin.org/bitcoin.pdf)
+  [![MIT License](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://github.com/AbdelStark/doko/blob/main/LICENSE)
   
   *Bitcoin vaults using Taproot (P2TR), OP_CHECKTEMPLATEVERIFY (CTV) for covenants, and OP_CHECKSIGFROMSTACK (CSFS) for spending delegation.*
   
