@@ -966,7 +966,7 @@ fn render_ui(f: &mut Frame, app: &mut App) {
             Constraint::Min(0),                                                    // Main content
             Constraint::Length(if app.status_message.is_empty() { 3 } else { 4 }), // Footer + status
         ])
-        .split(f.size());
+        .split(f.area());
 
     // Render header
     render_header(f, chunks[0], app);
@@ -1441,7 +1441,7 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
 
 /// Render popup overlay
 fn render_popup(f: &mut Frame, app: &App) {
-    let popup_area = centered_rect(60, 20, f.size());
+    let popup_area = centered_rect(60, 20, f.area());
 
     f.render_widget(Clear, popup_area);
 
@@ -1526,7 +1526,7 @@ fn render_vault_info_panel(f: &mut Frame, area: Rect, app: &App) {
 
 /// Render comprehensive vault details popup
 fn render_vault_details_popup(f: &mut Frame, app: &App) {
-    let popup_area = centered_rect(80, 70, f.size());
+    let popup_area = centered_rect(80, 70, f.area());
 
     f.render_widget(Clear, popup_area);
 

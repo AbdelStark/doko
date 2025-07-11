@@ -45,7 +45,7 @@ use bitcoin::{
     locktime::absolute::LockTime,
     opcodes::all::*,
     script::Builder,
-    secp256k1::{Keypair, Message, Secp256k1, SecretKey, XOnlyPublicKey},
+    secp256k1::{All, Keypair, Message, Secp256k1, SecretKey, XOnlyPublicKey},
     sighash::{Prevouts, SighashCache},
     taproot::{LeafVersion, TaprootBuilder, TaprootSpendInfo},
     transaction::Version,
@@ -83,7 +83,7 @@ pub struct HybridAdvancedVault {
     /// Vault configuration
     config: HybridVaultConfig,
     /// Secp256k1 context for cryptographic operations
-    secp: Secp256k1<secp256k1::All>,
+    secp: Secp256k1<All>,
 }
 
 impl HybridAdvancedVault {

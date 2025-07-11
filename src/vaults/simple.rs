@@ -33,7 +33,7 @@ use bitcoin::{
 };
 use serde::{Serialize, Deserialize};
 use std::str::FromStr;
-use rand::thread_rng;
+use bitcoin::secp256k1::rand::thread_rng;
 
 /// Represents a complete Taproot vault with CTV covenant enforcement.
 /// 

@@ -1608,7 +1608,7 @@ fn render_ui(f: &mut Frame, app: &mut App) {
             Constraint::Min(0),                                                    // Main content
             Constraint::Length(if app.status_message.is_empty() { 3 } else { 4 }), // Footer + status
         ])
-        .split(f.size());
+        .split(f.area());
 
     // Render header
     render_header(f, chunks[0], app);
@@ -2096,7 +2096,7 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
 
 /// Render popup overlay
 fn render_popup(f: &mut Frame, app: &App) {
-    let popup_area = centered_rect(60, 20, f.size());
+    let popup_area = centered_rect(60, 20, f.area());
 
     f.render_widget(Clear, popup_area);
 
@@ -2174,7 +2174,7 @@ fn render_vault_info_panel(f: &mut Frame, area: Rect, app: &App) {
 
 /// Render comprehensive vault details popup
 fn render_vault_details_popup(f: &mut Frame, app: &App) {
-    let popup_area = centered_rect(80, 70, f.size());
+    let popup_area = centered_rect(80, 70, f.area());
 
     f.render_widget(Clear, popup_area);
 
@@ -2378,7 +2378,7 @@ fn render_delegations(f: &mut Frame, area: Rect, app: &App) {
 
 /// Render delegation creation popup
 fn render_delegation_creation_popup(f: &mut Frame, app: &App) {
-    let popup_area = centered_rect(60, 50, f.size());
+    let popup_area = centered_rect(60, 50, f.area());
     f.render_widget(Clear, popup_area);
 
     let current_height = app.block_height;
@@ -2424,7 +2424,7 @@ fn render_delegation_creation_popup(f: &mut Frame, app: &App) {
 
 /// Render role selection popup
 fn render_role_selection_popup(f: &mut Frame, app: &App) {
-    let popup_area = centered_rect(50, 40, f.size());
+    let popup_area = centered_rect(50, 40, f.area());
     f.render_widget(Clear, popup_area);
 
     let roles_text = format!(
@@ -2458,7 +2458,7 @@ fn render_role_selection_popup(f: &mut Frame, app: &App) {
 
 /// Render message signing popup
 fn render_message_signing_popup(f: &mut Frame, app: &App) {
-    let popup_area = centered_rect(70, 60, f.size());
+    let popup_area = centered_rect(70, 60, f.area());
     f.render_widget(Clear, popup_area);
 
     let signature_text = if let Some(ref signature) = app.signed_message {
