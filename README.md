@@ -1,12 +1,17 @@
-# Doko: Bitcoin Vault implementation using CTV & CSFS
+# Doko: Bitcoin Vault with CTV and CSFS
 
-A Bitcoin vault implementation using Taproot (P2TR) addresses, OP_CHECKTEMPLATEVERIFY (CTV) covenants, and OP_CHECKSIGFROMSTACK (CSFS) delegation. Designed for the Mutinynet signet with CTV and CSFS support.
+Doko implements Bitcoin vaults using Taproot (P2TR), OP_CHECKTEMPLATEVERIFY (CTV) for covenants, and OP_CHECKSIGFROMSTACK (CSFS) for delegation. It's built for Mutinynet signet, which activates CTV and CSFS.
 
-## Architecture
+> Disclaimer: This is an experimental project for educational purposes.
 
-### Simple Vault Structure (CTV only)
+## How It Works
 
-The vault implements a three-stage Bitcoin custody system with covenant enforcement:
+### Basic Vault (CTV-Only)
+
+Funds go into a vault UTXO locked by CTV to a specific "trigger" tx template. Anyone can broadcast that trigger tx, moving funds to a conditional UTXO with two paths:
+
+- **Hot path**: Wait CSV blocks (e.g., 144), then spend with a hot key sig.
+- **Cold path**: Immediate CTV spend to a cold address: no sig, no wait.
 
 ```text
 ┌──────────────┐    CTV    ┌──────────────┐    IF/ELSE    ┌──────────────┐
@@ -17,7 +22,7 @@ The vault implements a three-stage Bitcoin custody system with covenant enforcem
    Protection                 Spending                        Wallet
 ```
 
-The lifecycle of the vault looks like this:
+The lifecycle:
 
 ```text
                     🏦 VAULT LIFECYCLE FLOW
@@ -87,7 +92,26 @@ The lifecycle of the vault looks like this:
     └──────────────┘
 ```
 
-## Hybrid Vault Structure (CTV + CSFS)
+Vault script: `<trigger_hash> OP_CTV`
+
+Trigger script:
+
+```text
+OP_IF
+    <csv> OP_CSV OP_DROP <hot_pubkey> OP_CHECKSIG
+OP_ELSE
+    <cold_hash> OP_CTV
+OP_ENDIF
+```
+
+In the implementation we use a NUMS internal key to force script spends only.
+
+### Hybrid Vault (CTV + CSFS)
+
+Adds a CSFS path for delegation alongside CTV. Vault UTXO has a two-leaf Taproot tree:
+
+- Leaf 1: CTV to trigger (same as basic).
+- Leaf 2: CSFS to verify a sig over a message, allowing delegated spends (e.g., treasurer signs off for ops team).
 
 ```text
                               🏦 HYBRID VAULT STRUCTURE
@@ -142,282 +166,7 @@ The lifecycle of the vault looks like this:
 └─────────────────┘   └─────────────────┘
 ```
 
-### Script Construction
-
-#### 1. Vault Deposit Script
-
-**Location**: Taproot script tree leaf  
-**Purpose**: Enforces predetermined spending path via CTV covenant
-
-```
-<32-byte_trigger_hash> OP_CHECKTEMPLATEVERIFY
-```
-
-**Properties**:
-
-- Only allows spending by transactions matching the committed template
-- Template hash computed using BIP-119 specification
-- No private key required for spending (covenant-based authorization)
-
-#### 2. Trigger Script
-
-**Location**: Taproot script tree leaf  
-**Purpose**: Provides two spending paths with different requirements
-
-```
-OP_IF
-    <csv_delay> OP_CHECKSEQUENCEVERIFY OP_DROP
-    <hot_pubkey> OP_CHECKSIG
-OP_ELSE
-    <32-byte_cold_hash> OP_CHECKTEMPLATEVERIFY
-OP_ENDIF
-```
-
-**Hot Path (IF branch)**:
-
-- Requires waiting `csv_delay` blocks (BIP68 relative timelock)
-- Requires signature from hot private key
-- Sequence value must be ≥ `csv_delay`
-
-**Cold Path (ELSE branch)**:
-
-- Immediate spending (no delay)
-- CTV covenant enforces exact recovery transaction
-- No signature required
-
-### Taproot Implementation
-
-#### Address Generation
-
-**Internal Key**: NUMS point (`50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0`)
-
-- Well-known point with no known discrete logarithm
-- Prevents key-path spending, forcing script-path usage
-
-**Script Tree**: Single-leaf configuration
-
-- Vault address: Contains CTV script only
-- Trigger address: Contains conditional IF/ELSE script only
-
-#### Witness Structure
-
-**Vault spending** (CTV script):
-
-```text
-Witness: [<script>, <control_block>]
-```
-
-**Trigger hot spending** (IF branch):
-
-```text
-Witness: [<signature>, <true>, <script>, <control_block>]
-```
-
-**Trigger cold spending** (ELSE branch):
-
-```text
-Witness: [<false>, <script>, <control_block>]
-```
-
-## Transaction Flow
-
-### 1. Vault Creation
-
-Generate three key pairs:
-
-- **Vault keys**: Used in script construction (not for signing)
-- **Hot keys**: Required for normal withdrawals after delay
-- **Cold keys**: Used for emergency recovery destination
-
-Compute transaction templates:
-
-- **Trigger transaction**: Vault → Trigger output
-- **Cold transaction**: Trigger → Cold wallet
-
-Create Taproot addresses:
-
-- **Vault address**: P2TR with CTV script leaf
-- **Trigger address**: P2TR with conditional script leaf
-
-### 2. Funding
-
-Send Bitcoin to the vault address. Funds are immediately protected by CTV covenant, can only be spent by the predetermined trigger transaction.
-
-### 3. Unvault Initiation (Trigger)
-
-**Who can trigger**: Anyone (vault owner, attacker, or third party)
-
-**Process**:
-
-1. Construct trigger transaction matching CTV template
-2. Create script-path witness with vault script and control block
-3. Broadcast transaction
-
-**Result**: Funds move to trigger output with conditional spending paths
-
-### 4A. Normal Withdrawal (Hot Path)
-
-**Requirements**:
-
-- Wait for CSV delay period
-- Sign transaction with hot private key
-- Set transaction sequence to CSV delay value
-
-**Process**:
-
-1. Monitor trigger output during delay period
-2. After delay expires, construct hot withdrawal transaction
-3. Create witness with hot signature and TRUE flag
-4. Broadcast transaction
-
-**Result**: Funds transferred to hot wallet
-
-### 4B. Emergency Recovery (Cold Path)
-
-**Requirements**:
-
-- Transaction must match cold CTV template exactly
-- No delay or signature required
-
-**Process**:
-
-1. Construct cold recovery transaction matching template
-2. Create witness with FALSE flag (takes ELSE branch)
-3. Broadcast transaction immediately
-
-**Result**: Funds transferred to cold wallet, bypassing delay
-
-## Implementation
-
-### Vault Types
-
-#### Simple Vault (`TaprootVault`)
-
-- Basic CTV covenant protection with hot/cold withdrawal paths
-- Single-leaf Taproot script tree
-- Time-delayed hot withdrawals with CSV (CheckSequenceVerify)
-- Immediate cold recovery via CTV covenant
-
-#### Hybrid Vault (`HybridAdvancedVault`)
-
-- Multi-path Taproot with both CTV and CSFS capabilities
-- **Path 1: CTV Covenant Operations** - Standard vault operations with timelock
-- **Path 2: CSFS Key Delegation** - Corporate treasury with role-based access
-- Balanced tree structure for optimal script path efficiency
-
-### Key Functions
-
-#### `ctv_vault_deposit_script()`
-
-Constructs CTV script for vault deposits:
-
-```rust
-fn ctv_vault_deposit_script(&self) -> Result<ScriptBuf> {
-    let ctv_hash = self.compute_ctv_hash()?;
-    Ok(Builder::new()
-        .push_slice(ctv_hash)
-        .push_opcode(OP_NOP4) // OP_CHECKTEMPLATEVERIFY
-        .into_script())
-}
-```
-
-#### `vault_trigger_script()`
-
-Constructs conditional script for trigger outputs:
-
-```rust
-fn vault_trigger_script(&self) -> Result<ScriptBuf> {
-    let hot_xonly = XOnlyPublicKey::from_str(&self.hot_pubkey)?;
-    let cold_ctv_hash = self.compute_cold_ctv_hash()?;
-
-    Ok(Builder::new()
-        .push_opcode(OP_IF)
-            .push_int(self.csv_delay as i64)
-            .push_opcode(OP_CSV)
-            .push_opcode(OP_DROP)
-            .push_x_only_key(&hot_xonly)
-            .push_opcode(OP_CHECKSIG)
-        .push_opcode(OP_ELSE)
-            .push_slice(cold_ctv_hash)
-            .push_opcode(OP_NOP4) // OP_CHECKTEMPLATEVERIFY
-        .push_opcode(OP_ENDIF)
-        .into_script())
-}
-```
-
-#### `compute_ctv_hash()`
-
-Implements BIP-119 CTV hash computation:
-
-```rust
-fn compute_ctv_hash(&self) -> Result<[u8; 32]> {
-    let trigger_tx = self.create_trigger_tx_template()?;
-
-    let mut data = Vec::new();
-    trigger_tx.version.consensus_encode(&mut data)?;
-    trigger_tx.lock_time.consensus_encode(&mut data)?;
-
-    // Encode sequences, outputs, and input index per BIP-119
-    // ... (check code for detailed implementation)
-
-    let hash = sha256::Hash::hash(&data);
-    Ok(hash.to_byte_array())
-}
-```
-
-## Usage
-
-### Command Line Interface
-
-```bash
-# Run automated demonstrations
-cargo run -- auto-demo --vault-type simple --scenario cold-recovery
-cargo run -- auto-demo --vault-type simple --scenario hot-withdrawal
-cargo run -- auto-demo --vault-type hybrid --scenario cold-recovery
-cargo run -- auto-demo --vault-type hybrid --scenario hot-withdrawal
-cargo run -- auto-demo --vault-type hybrid --scenario csfs-delegation
-
-# Launch interactive TUI dashboard
-cargo run -- dashboard --vault-type simple
-cargo run -- dashboard --vault-type hybrid
-```
-
-## Testing
-
-### Automated Demo
-
-The automated demo provides complete vault flow testing:
-
-#### Simple Vault Demo
-
-1. **Vault Creation**: Generates keys and Taproot addresses
-2. **RPC Funding**: Creates funding transaction via Bitcoin Core
-3. **Trigger Broadcast**: Initiates unvault process with CTV covenant
-4. **Recovery Path**: Demonstrates hot withdrawal (with CSV delay) or cold recovery (immediate)
-
-#### Hybrid Vault Demo
-
-1. **Corporate Key Generation**: Creates keys for hot, cold, treasurer, and operations roles
-2. **Multi-path Address**: Generates Taproot address supporting both CTV and CSFS paths
-3. **Vault Funding**: Funds the corporate treasury vault
-4. **Spending Scenarios**:
-   - **Hot Withdrawal**: Time-delayed spending via CTV covenant (Path 1)
-   - **Cold Recovery**: Emergency CTV covenant recovery (Path 1)
-   - **CSFS Delegation**: Treasurer delegates spending to operations team (Path 2)
-
-### TUI Dashboard
-
-Interactive terminal interface with:
-
-- Real-time blockchain monitoring
-- Transaction broadcasting capabilities
-- Balance tracking across addresses
-- Session transcript generation
-- Support for both simple and hybrid vault types
-
-## Architecture of the  Hybrid Vault Bitcoin Script
-
-The hybrid vault uses a balanced Taproot tree structure:
+And the tree:
 
 ```text
 Hybrid Vault (P2TR)
@@ -428,10 +177,46 @@ Hybrid Vault (P2TR)
     └── Message signature verification
 ```
 
+## Transaction Details
+
+1. **Setup**: Gen hot/cold keys. Compute trigger and cold tx templates. Build Taproot addresses.
+
+2. **Fund**: Send to vault P2TR. Locked by CTV.
+
+3. **Trigger**: Broadcast exact trigger tx. Witness: script + control block.
+
+4. **Hot spend**: After CSV, sig with hot key, sequence >= CSV. Witness: sig + TRUE + script + control.
+
+5. **Cold spend**: Broadcast exact cold tx. Witness: FALSE + script + control.
+
+6. **CSFS delegate** (hybrid): Spend vault directly with CSFS-verified sig. No trigger needed.
+
+## Try it
+
+CLI demos:
+
+```bash
+# See available commands: cargo run -- auto-demo --help
+cargo run -- auto-demo --vault-type simple --scenario cold-recovery
+cargo run -- auto-demo --vault-type hybrid --scenario csfs-delegation
+cargo run -- auto-demo --vault-type hybrid --scenario cold-recovery
+cargo run -- auto-demo --vault-type hybrid --scenario hot-withdrawal
+```
+
+TUI dashboard:
+
+```bash
+# TUI dashboard to monitor vaults
+
+## Run the dashboard for the simple vault type (CTV only)
+cargo run -- dashboard --vault-type simple
+
+## Run the dashboard for the hybrid vault type (CTV + CSFS)
+cargo run -- dashboard --vault-type hybrid
+```
+
+Monitors chain, broadcasts txs, tracks balances. Works on Mutinynet.
+
 ## License
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
-
----
-
-**Disclaimer**: This is experimental software for educational and research purposes. Do not use with real funds on Bitcoin mainnet.
+This project is licensed under the [MIT License](LICENSE).
