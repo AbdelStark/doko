@@ -19,7 +19,6 @@ use anyhow::{anyhow, Result};
 use bitcoin::secp256k1::rand::thread_rng;
 use bitcoin::{
     absolute::LockTime,
-    hashes::{sha256, Hash},
     key::TweakedPublicKey,
     secp256k1::{
         PublicKey as Secp256k1PublicKey, Secp256k1, SecretKey, XOnlyPublicKey,
@@ -145,24 +144,56 @@ impl NostrVault {
     /// Create the CSFS script for Nostr signature verification.
     ///
     /// This script uses OP_CHECKSIGFROMSTACK to verify that the provided signature
-    /// matches the expected Nostr event signature and was created by the expected pubkey.
+    /// (from witness) matches the expected Nostr event signature and was created by the expected pubkey.
     ///
     /// # Script Structure
     /// ```text
-    /// <expected_signature> <expected_pubkey> <event_hash> OP_CHECKSIGFROMSTACK
+    /// <event_hash> <expected_pubkey> OP_CHECKSIGFROMSTACK
     /// ```
     ///
+    /// # Execution Flow
+    /// 1. Script pushes event_hash and expected_pubkey onto stack
+    /// 2. Witness provides the signature
+    /// 3. CSFS verifies signature(pubkey, event_hash) == provided_signature
+    ///
     /// The script verifies:
-    /// 1. The signature matches the expected signature from setup
-    /// 2. The pubkey matches the expected Nostr pubkey
-    /// 3. The message hash matches the Nostr event hash
+    /// 1. The signature (from witness) is valid for the event hash
+    /// 2. The signature was created by the expected Nostr pubkey
+    /// 3. The message hash matches the hardcoded Nostr event hash
     ///
     /// # Returns
     /// A ScriptBuf containing the CSFS script for Nostr signature verification
     fn csfs_nostr_script(&self) -> Result<ScriptBuf> {
-        // Create simple CSFS script like the hybrid vault
-        // The actual verification data will be provided via witness stack
-        Ok(ScriptBuf::from(vec![OP_CHECKSIGFROMSTACK]))
+        // Parse the Nostr event to get the event hash (message that was signed)
+        let event: Event = Event::from_json(&self.nostr_event)?;
+        let event_hash = event.id.as_bytes();
+        
+        // Get the expected Nostr pubkey 
+        let expected_pubkey = hex::decode(&self.nostr_pubkey)?;
+        
+        // Create CSFS script that embeds only the message hash and pubkey
+        // The signature will be provided as witness during execution
+        // Script: <event_hash> <pubkey> OP_CHECKSIGFROMSTACK
+        let mut script_bytes = Vec::new();
+        
+        // Push event hash (message, 32 bytes) - hardcoded in script
+        if event_hash.len() <= 75 {
+            script_bytes.push(event_hash.len() as u8);
+            script_bytes.extend_from_slice(event_hash);
+        }
+        
+        // Push expected pubkey (32 bytes) - hardcoded in script
+        if expected_pubkey.len() <= 75 {
+            script_bytes.push(expected_pubkey.len() as u8);
+            script_bytes.extend_from_slice(&expected_pubkey);
+        }
+        
+        // Add OP_CHECKSIGFROMSTACK
+        // Stack during execution: [signature (from witness), message (from script), pubkey (from script)]
+        script_bytes.push(OP_CHECKSIGFROMSTACK);
+        
+        // Convert to ScriptBuf
+        Ok(ScriptBuf::from_bytes(script_bytes))
     }
     
     /// Generate the Taproot P2TR address for vault deposits.
@@ -217,11 +248,9 @@ impl NostrVault {
     /// For script-path spending with CSFS:
     /// ```text
     /// Witness Stack:
-    /// [0] <nostr_signature>    // The Nostr event signature
-    /// [1] <nostr_pubkey>       // The Nostr public key  
-    /// [2] <event_hash>         // The Nostr event hash
-    /// [3] <script>             // The CSFS script
-    /// [4] <control_block>      // Taproot control block
+    /// [0] <nostr_signature>    // The Nostr event signature (provided as witness)
+    /// [1] <script>             // The CSFS script (contains event_hash and pubkey)
+    /// [2] <control_block>      // Taproot control block
     /// ```
     ///
     /// # Parameters
@@ -266,19 +295,17 @@ impl NostrVault {
             .control_block(&(csfs_script.clone(), LeafVersion::TapScript))
             .ok_or_else(|| anyhow!("Failed to create control block"))?;
             
-        // Create witness stack for CSFS script (following hybrid vault pattern)
-        // Parse the Nostr event to get components
+        // Create witness stack for CSFS script
+        // The script now contains the message hash and pubkey
+        // We only need to provide the signature as witness
         let event: Event = Event::from_json(&self.nostr_event)?;
-        let event_hash = event.id.as_bytes();
         let signature = event.sig;
-        let pubkey = event.pubkey.to_bytes();
         
-        // Create CSFS witness stack: signature, message_hash, pubkey, script, control_block
+        // Create CSFS witness stack: signature, script, control_block
+        // Stack during execution: [signature (from witness), message (from script), pubkey (from script)]
         let mut witness = Witness::new();
-        witness.push(signature.as_ref());             // Signature for CSFS
-        witness.push(event_hash);                     // Message hash for CSFS  
-        witness.push(&pubkey);                        // Public key for CSFS
-        witness.push(csfs_script.to_bytes());         // Script
+        witness.push(signature.as_ref());             // Signature for CSFS (provided as witness)
+        witness.push(csfs_script.to_bytes());         // Script (contains message hash and pubkey)
         witness.push(control_block.serialize());      // Control block
         
         tx.input[0].witness = witness;
