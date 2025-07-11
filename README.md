@@ -1,6 +1,6 @@
 # Doko: Bitcoin Vault with CTV and CSFS
 
-Doko implements Bitcoin vaults using Taproot (P2TR), OP_CHECKTEMPLATEVERIFY (CTV) for covenants, and OP_CHECKSIGFROMSTACK (CSFS) for delegation. It's built for Mutinynet signet, which activates CTV and CSFS.
+Doko implements Bitcoin vaults using Taproot (P2TR), OP_CHECKTEMPLATEVERIFY (CTV) for covenants, and OP_CHECKSIGFROMSTACK (CSFS) for spending delegation. It's built for Mutinynet signet, which activates CTV and CSFS.
 
 > Disclaimer: This is an experimental project for educational purposes.
 
