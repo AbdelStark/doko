@@ -22,8 +22,8 @@
 //! doko dashboard --vault-type hybrid
 //! ```
 
-use anyhow::{Result, anyhow};
-use bitcoin::{OutPoint, Network, Amount, Address};
+use anyhow::{anyhow, Result};
+use bitcoin::{Address, Amount, Network, OutPoint};
 use clap::{Parser, Subcommand};
 use std::{str::FromStr, time::Duration};
 use tokio::time::sleep;
@@ -36,7 +36,7 @@ mod vaults;
 
 use config::vault as vault_config;
 use services::MutinynetClient;
-use vaults::{TaprootVault, HybridAdvancedVault, HybridVaultConfig};
+use vaults::{HybridAdvancedVault, HybridVaultConfig, TaprootVault};
 
 /// Vault implementation type
 #[derive(Clone, Debug, clap::ValueEnum)]
@@ -141,9 +141,7 @@ async fn auto_demo(
 
     match vault_type {
         VaultType::Simple => simple_vault_auto_demo(amount, delay, scenario).await,
-        VaultType::Hybrid => {
-            hybrid_vault_auto_demo(amount, delay, scenario).await
-        }
+        VaultType::Hybrid => hybrid_vault_auto_demo(amount, delay, scenario).await,
     }
 }
 
@@ -223,7 +221,6 @@ async fn simple_vault_auto_demo(amount: u64, delay: u32, scenario: &str) -> Resu
 
     Ok(())
 }
-
 
 async fn execute_cold_clawback(
     vault: &TaprootVault,
@@ -335,17 +332,23 @@ async fn execute_hot_withdrawal(
     let trigger_block_height = rpc.get_block_count()?;
     let required_confirmations = vault.csv_delay as u64;
     let target_block_height = trigger_block_height + required_confirmations;
-    
+
     println!("   📊 Current block height: {}", trigger_block_height);
     println!("   🎯 Target block height: {}", target_block_height);
-    println!("   ⏳ Waiting for {} confirmations...", required_confirmations);
-    
+    println!(
+        "   ⏳ Waiting for {} confirmations...",
+        required_confirmations
+    );
+
     while (rpc.get_confirmations(&trigger_txid)? as u64) < required_confirmations {
         print!(".");
         std::io::Write::flush(&mut std::io::stdout())?;
         sleep(Duration::from_secs(3)).await;
     }
-    println!(" ✅ CSV delay satisfied ({} confirmations)", rpc.get_confirmations(&trigger_txid)?);
+    println!(
+        " ✅ CSV delay satisfied ({} confirmations)",
+        rpc.get_confirmations(&trigger_txid)?
+    );
     println!();
 
     // Hot withdrawal
@@ -373,7 +376,6 @@ async fn execute_hot_withdrawal(
     Ok(())
 }
 
-
 async fn hybrid_vault_auto_demo(amount: u64, delay: u32, scenario: &str) -> Result<()> {
     println!("🏦 DOKO HYBRID VAULT DEMO (CTV + CSFS Multi-Path)");
     println!("═══════════════════════════════════════════════════");
@@ -390,10 +392,10 @@ async fn hybrid_vault_auto_demo(amount: u64, delay: u32, scenario: &str) -> Resu
         "📡 Network: signet | Block Height: {}",
         rpc.get_block_count()?
     );
-    
-    // CRITICAL FIX: Clean up any existing UTXOs for the vault address to prevent conflicts
+
+    // Clean up any existing UTXOs for the vault address to prevent conflicts
     println!("🧹 Cleaning up any existing vault UTXOs...");
-    let _ = cleanup_vault_utxos(&rpc, None).await;  // Don't fail if cleanup fails
+    let _ = cleanup_vault_utxos(&rpc, None).await; // Don't fail if cleanup fails
     println!();
 
     // Generate test keys for hybrid vault
@@ -402,7 +404,7 @@ async fn hybrid_vault_auto_demo(amount: u64, delay: u32, scenario: &str) -> Resu
     println!("└─────────────────────────────────────────────────────────────┘");
     println!();
 
-    // CRITICAL FIX: Use timestamp-based seed to ensure unique keys every time
+    // Use timestamp-based seed to ensure unique keys every time
     let timestamp_seed = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
         .as_secs() as u32;
@@ -439,14 +441,20 @@ async fn hybrid_vault_auto_demo(amount: u64, delay: u32, scenario: &str) -> Resu
     println!("└─────────────────────────────────────────────────────────────┘");
     println!();
 
-    println!("🏗️  Creating Hybrid Vault ({} sats, {} block delay)... ✅", amount, delay);
+    println!(
+        "🏗️  Creating Hybrid Vault ({} sats, {} block delay)... ✅",
+        amount, delay
+    );
     println!("📍 Vault Address: {}", vault_info.address);
     println!("🌐 Network: {}", vault_info.network);
     println!();
 
     println!("📋 Vault Architecture:");
     println!("   ├── Path 1: CTV Covenant Operations");
-    println!("   │   ├── Hot withdrawal (CSV timelock: {} blocks)", vault_info.csv_delay);
+    println!(
+        "   │   ├── Hot withdrawal (CSV timelock: {} blocks)",
+        vault_info.csv_delay
+    );
     println!("   │   └── Cold emergency recovery (immediate)");
     println!("   └── Path 2: CSFS Key Delegation");
     println!("       ├── Treasurer delegation authority");
@@ -465,9 +473,12 @@ async fn hybrid_vault_auto_demo(amount: u64, delay: u32, scenario: &str) -> Resu
         std::io::Write::flush(&mut std::io::stdout())?;
         sleep(Duration::from_secs(3)).await;
     }
-    println!(" ✅ {} confirmations", rpc.get_confirmations(&funding_txid)?);
+    println!(
+        " ✅ {} confirmations",
+        rpc.get_confirmations(&funding_txid)?
+    );
 
-    // NEW: Fetch transaction details and find correct vout by matching script_pubkey
+    // Fetch transaction details and find correct vout by matching script_pubkey
     let tx_info = rpc.get_raw_transaction_verbose(&funding_txid)?;
     let vault_addr = Address::from_str(&vault_info.address)?.require_network(Network::Signet)?;
     let vault_script_hex = hex::encode(vault_addr.script_pubkey().to_bytes());
@@ -484,7 +495,8 @@ async fn hybrid_vault_auto_demo(amount: u64, delay: u32, scenario: &str) -> Resu
         }
     }
 
-    let vault_vout = vault_vout.ok_or_else(|| anyhow!("Could not find vault output in funding tx"))?;
+    let vault_vout =
+        vault_vout.ok_or_else(|| anyhow!("Could not find vault output in funding tx"))?;
     let vault_utxo = OutPoint::new(funding_txid, vault_vout);
     println!("📦 Vault UTXO: {}", vault_utxo);
     println!();
@@ -505,13 +517,13 @@ async fn hybrid_vault_auto_demo(amount: u64, delay: u32, scenario: &str) -> Resu
             println!("════════════════════════════════════════════");
             println!("Demonstrating all hybrid vault capabilities:");
             println!();
-            
+
             // Demonstrate delegation message creation
             println!("📝 Creating CSFS delegation message...");
             let delegation_amount = if amount > 3000 {
-                amount - 3000  // Leave 3000 sats for fees
+                amount - 3000 // Leave 3000 sats for fees
             } else {
-                amount / 2     // Use half if amount is small
+                amount / 2 // Use half if amount is small
             };
             let delegation_message = vault.create_delegation_message(
                 Amount::from_sat(delegation_amount),
@@ -520,7 +532,7 @@ async fn hybrid_vault_auto_demo(amount: u64, delay: u32, scenario: &str) -> Resu
             );
             println!("✅ Delegation Message: {}", delegation_message);
             println!();
-            
+
             // For comprehensive demo, show cold recovery capability
             execute_hybrid_cold_recovery(&vault, vault_utxo, &rpc).await?;
         }
@@ -566,7 +578,10 @@ async fn execute_hybrid_hot_withdrawal(
         std::io::Write::flush(&mut std::io::stdout())?;
         sleep(Duration::from_secs(3)).await;
     }
-    println!(" ✅ {} confirmations", rpc.get_confirmations(&trigger_txid)?);
+    println!(
+        " ✅ {} confirmations",
+        rpc.get_confirmations(&trigger_txid)?
+    );
 
     let trigger_utxo = OutPoint::new(trigger_txid, 0);
     println!("📦 Trigger UTXO: {}", trigger_utxo);
@@ -575,22 +590,29 @@ async fn execute_hybrid_hot_withdrawal(
     // Wait for CSV delay before attempting hot withdrawal
     let csv_delay = vault.get_vault_info().csv_delay as u64;
     println!("⏰ Waiting for CSV delay ({} blocks)...", csv_delay);
-    
+
     // Get the block when the trigger was confirmed
-    let trigger_block_height = rpc.get_block_count()? - (rpc.get_confirmations(&trigger_txid)? as u64) + 1;
+    let trigger_block_height =
+        rpc.get_block_count()? - (rpc.get_confirmations(&trigger_txid)? as u64) + 1;
     let required_confirmations = csv_delay;
     let target_block_height = trigger_block_height + required_confirmations;
-    
+
     println!("   📊 Trigger confirmed at block: {}", trigger_block_height);
     println!("   🎯 Target block height: {}", target_block_height);
-    println!("   ⏳ Waiting for {} confirmations from trigger...", required_confirmations);
-    
+    println!(
+        "   ⏳ Waiting for {} confirmations from trigger...",
+        required_confirmations
+    );
+
     while (rpc.get_confirmations(&trigger_txid)? as u64) < required_confirmations {
         print!(".");
         std::io::Write::flush(&mut std::io::stdout())?;
         sleep(Duration::from_secs(3)).await;
     }
-    println!(" ✅ CSV delay satisfied ({} confirmations)", rpc.get_confirmations(&trigger_txid)?);
+    println!(
+        " ✅ CSV delay satisfied ({} confirmations)",
+        rpc.get_confirmations(&trigger_txid)?
+    );
     println!();
 
     // Create destination address
@@ -600,7 +622,7 @@ async fn execute_hybrid_hot_withdrawal(
     // Create hot withdrawal transaction from trigger UTXO
     let withdrawal_amount = Amount::from_sat(vault.get_vault_info().amount - 3000);
     println!("💰 Withdrawal Amount: {} sats", withdrawal_amount.to_sat());
-    
+
     println!("🔨 Creating hot withdrawal transaction...");
     let hot_tx = vault.create_hot_withdrawal(trigger_utxo, &destination, withdrawal_amount)?;
     let hot_txid = rpc.send_raw_transaction(&hot_tx)?;
@@ -646,7 +668,10 @@ async fn execute_hybrid_cold_recovery(
         std::io::Write::flush(&mut std::io::stdout())?;
         sleep(Duration::from_secs(3)).await;
     }
-    println!(" ✅ {} confirmations", rpc.get_confirmations(&trigger_txid)?);
+    println!(
+        " ✅ {} confirmations",
+        rpc.get_confirmations(&trigger_txid)?
+    );
 
     let trigger_utxo = OutPoint::new(trigger_txid, 0);
     println!("📦 Trigger UTXO: {}", trigger_utxo);
@@ -680,7 +705,10 @@ async fn execute_hybrid_cold_recovery(
     println!();
 
     println!("🛡️  FUNDS SECURED IN COLD STORAGE");
-    println!("   💰 Amount: {} sats", vault.get_vault_info().amount - 2000);
+    println!(
+        "   💰 Amount: {} sats",
+        vault.get_vault_info().amount - 2000
+    );
     println!("   📍 Address: {}", vault.get_vault_info().cold_pubkey);
     println!("   ⚡ No delay required - immediate recovery!");
 
@@ -703,33 +731,33 @@ async fn execute_hybrid_csfs_delegation(
 
     // Create delegation message - use dynamic address to avoid UTXO conflicts
     let destination = rpc.get_new_address()?;
-    
-    // CRITICAL FIX: Get the actual UTXO amount instead of using config amount
+
+    // Get the actual UTXO amount instead of using config amount
     // The config amount might differ from actual funded amount due to precision issues
     let actual_vault_amount = {
         let tx_info = rpc.get_raw_transaction_verbose(&vault_utxo.txid)?;
         let vout_info = &tx_info["vout"][vault_utxo.vout as usize];
         let amount_btc = vout_info["value"].as_f64().unwrap_or(0.0);
-        (amount_btc * 100_000_000.0) as u64  // Convert BTC to satoshis
+        (amount_btc * 100_000_000.0) as u64 // Convert BTC to satoshis
     };
-    
-    println!("🔍 Debug: Config amount: {} sats", vault.get_vault_info().amount);
+
+    println!(
+        "🔍 Debug: Config amount: {} sats",
+        vault.get_vault_info().amount
+    );
     println!("🔍 Debug: Actual UTXO amount: {} sats", actual_vault_amount);
-    
+
     // Use actual amount for delegation calculation, leaving more margin for fees
     let delegation_amount = Amount::from_sat(if actual_vault_amount > 4000 {
-        actual_vault_amount - 4000  // Leave 4000 sats for fees (more conservative)
+        actual_vault_amount - 4000 // Leave 4000 sats for fees (more conservative)
     } else {
-        actual_vault_amount / 3     // Use 1/3 if amount is small (more conservative)
+        actual_vault_amount / 3 // Use 1/3 if amount is small (more conservative)
     });
     let expiry_height = (rpc.get_block_count()? + 100) as u32;
-    
-    let delegation_message = vault.create_delegation_message(
-        delegation_amount,
-        &destination.to_string(),
-        expiry_height,
-    );
-    
+
+    let delegation_message =
+        vault.create_delegation_message(delegation_amount, &destination.to_string(), expiry_height);
+
     println!("📝 Delegation Message: {}", delegation_message);
     println!("🎯 Destination: {}", destination);
     println!("💰 Delegated Amount: {} sats", delegation_amount.to_sat());
@@ -752,7 +780,10 @@ async fn execute_hybrid_csfs_delegation(
         std::io::Write::flush(&mut std::io::stdout())?;
         sleep(Duration::from_secs(3)).await;
     }
-    println!(" ✅ {} confirmations", rpc.get_confirmations(&delegation_txid)?);
+    println!(
+        " ✅ {} confirmations",
+        rpc.get_confirmations(&delegation_txid)?
+    );
 
     println!("🛡️  CSFS DELEGATION COMPLETED");
     println!("   💰 Amount: {} sats", delegation_amount.to_sat());
@@ -762,30 +793,29 @@ async fn execute_hybrid_csfs_delegation(
     Ok(())
 }
 
-
 fn generate_test_keypair_u32(seed: u32) -> Result<(String, String)> {
-    use bitcoin::secp256k1::{Secp256k1, SecretKey, Keypair};
     use bitcoin::key::XOnlyPublicKey;
-    
+    use bitcoin::secp256k1::{Keypair, Secp256k1, SecretKey};
+
     let secp = Secp256k1::new();
     let mut private_key_bytes = [0u8; 32];
-    
+
     // Use u32 seed to create truly unique keys without wraparound
     private_key_bytes[0..4].copy_from_slice(&seed.to_le_bytes());
-    private_key_bytes[4] = (seed >> 24) as u8;  // Additional entropy
+    private_key_bytes[4] = (seed >> 24) as u8; // Additional entropy
     private_key_bytes[5] = (seed >> 16) as u8;
     private_key_bytes[6] = (seed >> 8) as u8;
     private_key_bytes[7] = seed as u8;
-    
+
     // Fill remaining bytes with a pattern based on seed to ensure uniqueness
     for (i, byte) in private_key_bytes.iter_mut().enumerate().skip(8) {
         *byte = ((seed >> ((i % 4) * 8)) ^ (i as u32)) as u8;
     }
-    
+
     let secret_key = SecretKey::from_slice(&private_key_bytes)?;
     let keypair = Keypair::from_secret_key(&secp, &secret_key);
     let (public_key, _) = XOnlyPublicKey::from_keypair(&keypair);
-    
+
     Ok((
         hex::encode(private_key_bytes),
         hex::encode(public_key.serialize()),
@@ -799,12 +829,17 @@ async fn cleanup_vault_utxos(rpc: &MutinynetClient, vault_address: Option<&str>)
         match rpc.scan_utxos_for_address(address) {
             Ok(utxos) => {
                 if !utxos.is_empty() {
-                    println!("🧹 Found {} existing UTXOs at vault address, cleaning up...", utxos.len());
-                    
+                    println!(
+                        "🧹 Found {} existing UTXOs at vault address, cleaning up...",
+                        utxos.len()
+                    );
+
                     // Get a new address to send funds back to wallet
                     if let Ok(_return_address) = rpc.get_new_address() {
                         for utxo in utxos {
-                            if let (Some(txid), Some(vout)) = (utxo["txid"].as_str(), utxo["vout"].as_u64()) {
+                            if let (Some(txid), Some(vout)) =
+                                (utxo["txid"].as_str(), utxo["vout"].as_u64())
+                            {
                                 println!("   ♻️  Cleaning up UTXO: {}:{}", txid, vout);
                                 // Note: This is a simplified cleanup - in practice, you would need to
                                 // properly construct and sign a transaction to spend these UTXOs
@@ -819,10 +854,9 @@ async fn cleanup_vault_utxos(rpc: &MutinynetClient, vault_address: Option<&str>)
             }
         }
     }
-    
+
     // Always wait a moment to let previous transactions settle
     // This reduces flakiness from rapid consecutive operations
     sleep(Duration::from_millis(500)).await;
     Ok(())
 }
-
