@@ -230,6 +230,11 @@ cargo run -- dashboard --vault-type simple
 cargo run -- dashboard --vault-type hybrid
 ```
 
+<div align="center">
+  <img src="resources/img/doko_tui_hybrid_dashboard_demo_screenshot.png" alt="Doko TUI Dashboard Demo" width="800"/>
+  <p><em>Hybrid vault dashboard monitoring chain state, vault balances, and transaction history</em></p>
+</div>
+
 Monitors chain, broadcasts txs, tracks balances. Works on Mutinynet.
 
 ---
