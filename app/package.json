@@ -1,0 +1,45 @@
+{
+  "name": "doko-webapp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@cmdcode/tapscript": "^1.5.3",
+    "@noble/hashes": "^1.3.3",
+    "@noble/secp256k1": "^1.7.1",
+    "axios": "^1.6.2",
+    "bip32": "^4.0.0",
+    "bip39": "^3.1.0",
+    "bitcoinjs-lib": "^6.1.7",
+    "buffer": "^6.0.3",
+    "date-fns": "^3.0.6",
+    "ecpair": "^3.0.0",
+    "events": "^3.3.0",
+    "framer-motion": "^10.16.16",
+    "idb": "^8.0.0",
+    "qrcode.react": "^3.1.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-hot-toast": "^2.4.1",
+    "react-router-dom": "^6.21.0",
+    "tiny-secp256k1": "^2.2.4",
+    "uuid": "^9.0.1",
+    "vite-plugin-top-level-await": "^1.5.0",
+    "vite-plugin-wasm": "^3.5.0"
+  },
+  "devDependencies": {
+    "@esbuild-plugins/node-globals-polyfill": "^0.2.3",
+    "@esbuild-plugins/node-modules-polyfill": "^0.2.2",
+    "@vitejs/plugin-react": "^4.2.1",
+    "autoprefixer": "^10.4.16",
+    "postcss": "^8.4.32",
+    "rollup-plugin-polyfill-node": "^0.13.0",
+    "tailwindcss": "^3.4.0",
+    "vite": "^5.0.10"
+  }
+}
