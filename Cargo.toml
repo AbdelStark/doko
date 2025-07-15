@@ -76,3 +76,11 @@ webbrowser = "1.0"
 [[bin]]
 name = "doko"
 path = "src/main.rs"
+
+[[bin]]
+name = "nostr_market"
+path = "bin/nostr_market.rs"
+
+[[bin]]
+name = "demo_prediction_market"
+path = "bin/demo_prediction_market.rs"

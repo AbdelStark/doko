@@ -30,6 +30,7 @@ use tokio::time::sleep;
 
 mod config;
 mod error;
+mod prediction_markets;
 mod services;
 mod tui;
 mod vaults;
