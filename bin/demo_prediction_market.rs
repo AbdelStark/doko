@@ -39,7 +39,7 @@ async fn main() -> Result<()> {
     println!("═══════════════════════════════════════════════════════════════════════════════");
     
     // Create and run the demo
-    let mut demo = PredictionMarketDemo::new()?;
+    let mut demo = PredictionMarketDemo::new(cli.auto)?;
     let results = demo.run_demo().await?;
     
     // Export results if requested
