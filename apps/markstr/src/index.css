@@ -1,0 +1,144 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    font-family: 'Space Grotesk', monospace;
+  }
+  
+  body {
+    @apply bg-light text-dark font-grotesk;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply px-6 py-3 font-semibold text-center border-2 border-black shadow-brutal transition-all duration-200 hover:translate-x-1 hover:translate-y-1 hover:shadow-brutal-sm active:translate-x-2 active:translate-y-2 active:shadow-none;
+  }
+  
+  .btn-primary {
+    @apply btn bg-primary text-dark hover:bg-primary/90;
+  }
+  
+  .btn-secondary {
+    @apply btn bg-secondary text-dark hover:bg-secondary/90;
+  }
+  
+  .btn-tertiary {
+    @apply btn bg-tertiary text-dark hover:bg-tertiary/90;
+  }
+  
+  .btn-success {
+    @apply btn bg-success text-dark hover:bg-success/90;
+  }
+  
+  .btn-danger {
+    @apply btn bg-danger text-light hover:bg-danger/90;
+  }
+  
+  .btn-outline {
+    @apply btn bg-light text-dark hover:bg-gray-100;
+  }
+  
+  .card {
+    @apply bg-light border-2 border-black shadow-brutal p-6;
+  }
+  
+  .card-sm {
+    @apply bg-light border-2 border-black shadow-brutal-sm p-4;
+  }
+  
+  .input {
+    @apply w-full px-4 py-3 border-2 border-black font-medium focus:outline-none focus:ring-0;
+  }
+  
+  .input-error {
+    @apply input border-danger;
+  }
+  
+  .badge {
+    @apply inline-flex items-center px-3 py-1 text-xs font-bold border-2 border-black;
+  }
+  
+  .badge-primary {
+    @apply badge bg-primary text-dark;
+  }
+  
+  .badge-secondary {
+    @apply badge bg-secondary text-dark;
+  }
+  
+  .badge-success {
+    @apply badge bg-success text-dark;
+  }
+  
+  .badge-danger {
+    @apply badge bg-danger text-light;
+  }
+  
+  .badge-gray {
+    @apply badge bg-gray-200 text-dark;
+  }
+}
+
+@layer utilities {
+  .text-shadow-brutal {
+    text-shadow: 2px 2px 0px rgba(0,0,0,1);
+  }
+  
+  .hover-lift {
+    @apply transition-all duration-200 hover:translate-x-1 hover:translate-y-1 hover:shadow-brutal-sm;
+  }
+  
+  .active-press {
+    @apply active:translate-x-2 active:translate-y-2 active:shadow-none;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border: 1px solid #000;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #FF6B00;
+  border: 1px solid #000;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #e55a00;
+}
+
+/* Loading animation */
+.loading {
+  @apply animate-pulse;
+}
+
+.loading-dots::after {
+  content: '...';
+  animation: dots 2s infinite;
+}
+
+@keyframes dots {
+  0%, 20% {
+    content: '.';
+  }
+  40% {
+    content: '..';
+  }
+  60% {
+    content: '...';
+  }
+  80% {
+    content: '....';
+  }
+  100% {
+    content: '.....';
+  }
+}
