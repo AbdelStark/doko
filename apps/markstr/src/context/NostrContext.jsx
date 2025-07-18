@@ -1,6 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react'
 import NostrService from '../services/NostrService'
-import toast from 'react-hot-toast'
 
 const NostrContext = createContext(null)
 
@@ -15,21 +14,21 @@ export function NostrProvider({ children }) {
   useEffect(() => {
     const initializeNostr = async () => {
       try {
-        const relays = JSON.parse(import.meta.env.VITE_NOSTR_RELAYS || '[]')
-        const service = new NostrService(relays)
+        const relays = JSON.parse(import.meta.env.VITE_NOSTR_RELAYS || '["wss://relay.damus.io"]')
+        const service = new NostrService({ relays })
         
-        await service.connect()
+        // Connect to relays
+        const connectedCount = await service.connectToAllRelays()
         setNostrService(service)
-        setConnected(true)
+        setConnected(connectedCount > 0)
         
-        // Load or generate oracle keys
-        const keys = await service.getOrCreateOracleKeys()
+        // Generate oracle keys
+        const keys = service.generateOracleKeys()
         setOracleKeys(keys)
         
-        toast.success('Connected to Nostr relays')
+        console.log('Nostr service initialized with', connectedCount, 'relays')
       } catch (error) {
         console.error('Failed to initialize Nostr:', error)
-        toast.error('Failed to connect to Nostr relays')
         setConnected(false)
       }
     }
@@ -47,52 +46,53 @@ export function NostrProvider({ children }) {
       return event
     } catch (error) {
       console.error('Failed to publish event:', error)
-      toast.error('Failed to publish event')
       return null
     } finally {
       setLoading(false)
     }
   }
 
-  const signOutcome = async (marketId, outcome, timestamp) => {
-    if (!nostrService || !oracleKeys) return null
-
-    try {
-      setLoading(true)
-      const signature = await nostrService.signOutcome(
-        oracleKeys,
-        marketId,
-        outcome,
-        timestamp
-      )
-      return signature
-    } catch (error) {
-      console.error('Failed to sign outcome:', error)
-      toast.error('Failed to sign outcome')
-      return null
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const verifySignature = async (signature, message, publicKey) => {
-    if (!nostrService) return false
-
-    try {
-      return await nostrService.verifySignature(signature, message, publicKey)
-    } catch (error) {
-      console.error('Failed to verify signature:', error)
-      return false
-    }
-  }
-
-  const subscribeToEvents = async (filters, callback) => {
+  const createMarketEvent = async (marketId, question, outcomes, settlementTime) => {
     if (!nostrService) return null
 
     try {
-      return await nostrService.subscribeToEvents(filters, callback)
+      setLoading(true)
+      const event = await nostrService.createMarketEvent(marketId, question, outcomes, settlementTime)
+      const published = await nostrService.publishEvent(event)
+      setEvents(prev => [event, ...prev])
+      return event
     } catch (error) {
-      console.error('Failed to subscribe to events:', error)
+      console.error('Failed to create market event:', error)
+      return null
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const createSettlementEvent = async (marketId, winningOutcome, signature) => {
+    if (!nostrService) return null
+
+    try {
+      setLoading(true)
+      const event = await nostrService.createSettlementEvent(marketId, winningOutcome, signature)
+      const published = await nostrService.publishEvent(event)
+      setEvents(prev => [event, ...prev])
+      return event
+    } catch (error) {
+      console.error('Failed to create settlement event:', error)
+      return null
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const subscribeToMarkets = async (callback) => {
+    if (!nostrService) return null
+
+    try {
+      return await nostrService.subscribeToMarkets(callback)
+    } catch (error) {
+      console.error('Failed to subscribe to markets:', error)
       return null
     }
   }
@@ -104,9 +104,9 @@ export function NostrProvider({ children }) {
     events,
     loading,
     publishEvent,
-    signOutcome,
-    verifySignature,
-    subscribeToEvents,
+    createMarketEvent,
+    createSettlementEvent,
+    subscribeToMarkets,
   }
 
   return (

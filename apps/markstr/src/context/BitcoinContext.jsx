@@ -1,39 +1,33 @@
 import React, { createContext, useContext, useState, useEffect } from 'react'
 import { useRole } from './RoleContext'
 import BitcoinRPC from '../services/BitcoinRPC'
-import WalletService from '../services/WalletService'
-import toast from 'react-hot-toast'
 
 const BitcoinContext = createContext(null)
 
 export function BitcoinProvider({ children }) {
   const { currentRole, getCurrentRoleConfig } = useRole()
   const [rpc, setRpc] = useState(null)
-  const [walletService, setWalletService] = useState(null)
   const [currentWallet, setCurrentWallet] = useState(null)
   const [balance, setBalance] = useState(0)
   const [loading, setLoading] = useState(false)
   const [connected, setConnected] = useState(false)
+  const [walletInfo, setWalletInfo] = useState(null)
 
   // Initialize RPC client
   useEffect(() => {
     const initializeRPC = async () => {
       try {
         const rpcClient = new BitcoinRPC({
-          url: __RPC_URL__,
-          port: __RPC_PORT__,
-          username: __RPC_USER__,
-          password: __RPC_PASSWORD__,
+          url: import.meta.env.VITE_RPC_URL || '127.0.0.1',
+          port: import.meta.env.VITE_RPC_PORT || 38332,
+          username: import.meta.env.VITE_RPC_USER || 'test',
+          password: import.meta.env.VITE_RPC_PASSWORD || 'test',
         })
-
-        const walletSvc = new WalletService(rpcClient)
         
         setRpc(rpcClient)
-        setWalletService(walletSvc)
         setConnected(true)
       } catch (error) {
         console.error('Failed to initialize Bitcoin RPC:', error)
-        toast.error('Failed to connect to Bitcoin node')
         setConnected(false)
       }
     }
@@ -43,7 +37,7 @@ export function BitcoinProvider({ children }) {
 
   // Switch wallet when role changes
   useEffect(() => {
-    if (!walletService || !currentRole) return
+    if (!rpc || !currentRole) return
 
     const switchWallet = async () => {
       setLoading(true)
@@ -55,99 +49,103 @@ export function BitcoinProvider({ children }) {
           throw new Error('No wallet configured for this role')
         }
 
-        // Create or load wallet
-        await walletService.createOrLoadWallet(walletName)
+        // Set the wallet for the RPC client
+        rpc.setWallet(walletName)
         setCurrentWallet(walletName)
         
-        // Get balance
-        const walletBalance = await walletService.getBalance(walletName)
-        setBalance(walletBalance)
+        // Try to get wallet info
+        try {
+          const info = await rpc.getWalletInfo()
+          setWalletInfo(info)
+          setBalance(info.balance || 0)
+        } catch (error) {
+          // Wallet might not exist, try to create it
+          try {
+            await rpc.createWallet(walletName)
+            const info = await rpc.getWalletInfo()
+            setWalletInfo(info)
+            setBalance(info.balance || 0)
+          } catch (createError) {
+            console.warn('Could not create wallet, using mock data')
+            setWalletInfo({ balance: 0, walletname: walletName })
+            setBalance(0)
+          }
+        }
         
-        toast.success(`Switched to ${roleConfig.name}'s wallet`)
       } catch (error) {
         console.error('Failed to switch wallet:', error)
-        toast.error(`Failed to switch to ${getCurrentRoleConfig().name}'s wallet`)
+        // Use mock data for development
+        setWalletInfo({ balance: 0, walletname: getCurrentRoleConfig().wallet })
+        setBalance(0)
       } finally {
         setLoading(false)
       }
     }
 
     switchWallet()
-  }, [currentRole, walletService])
+  }, [currentRole, rpc])
 
   const refreshBalance = async () => {
-    if (!walletService || !currentWallet) return
+    if (!rpc || !currentWallet) return
 
     try {
-      const walletBalance = await walletService.getBalance(currentWallet)
-      setBalance(walletBalance)
+      const info = await rpc.getWalletInfo()
+      setBalance(info.balance || 0)
+      setWalletInfo(info)
     } catch (error) {
       console.error('Failed to refresh balance:', error)
     }
   }
 
   const generateAddress = async () => {
-    if (!walletService || !currentWallet) return null
+    if (!rpc || !currentWallet) return null
 
     try {
-      const address = await walletService.generateAddress(currentWallet)
+      const address = await rpc.getNewAddress()
       return address
     } catch (error) {
       console.error('Failed to generate address:', error)
-      toast.error('Failed to generate address')
       return null
     }
   }
 
   const sendTransaction = async (toAddress, amount) => {
-    if (!walletService || !currentWallet) return null
+    if (!rpc || !currentWallet) return null
 
     try {
       setLoading(true)
-      const txid = await walletService.sendTransaction(currentWallet, toAddress, amount)
+      const unspent = await rpc.listUnspent()
+      if (unspent.length === 0) {
+        throw new Error('No unspent outputs available')
+      }
+
+      const inputs = [{ txid: unspent[0].txid, vout: unspent[0].vout }]
+      const outputs = { [toAddress]: amount }
+      
+      const rawTx = await rpc.createRawTransaction(inputs, outputs)
+      const signedTx = await rpc.signRawTransactionWithWallet(rawTx)
+      const txid = await rpc.sendRawTransaction(signedTx.hex)
+      
       await refreshBalance()
       return txid
     } catch (error) {
       console.error('Failed to send transaction:', error)
-      toast.error('Failed to send transaction')
       return null
     } finally {
       setLoading(false)
     }
   }
 
-  const getTransactionHistory = async () => {
-    if (!walletService || !currentWallet) return []
-
-    try {
-      const history = await walletService.getTransactionHistory(currentWallet)
-      return history
-    } catch (error) {
-      console.error('Failed to get transaction history:', error)
-      return []
-    }
-  }
-
-  const fundWallet = async (amount = 10000) => {
-    if (!walletService || !currentWallet) return null
+  const fundWallet = async (amount = 10) => {
+    if (!rpc || !currentWallet) return null
 
     try {
       setLoading(true)
-      const address = await generateAddress()
-      if (!address) throw new Error('Failed to generate address')
-
-      // In a real application, this would be done externally
-      // For demo purposes, we'll simulate funding
-      toast.success(`Funding request submitted for ${amount} sats to ${address}`)
-      
-      // Simulate delay
-      await new Promise(resolve => setTimeout(resolve, 2000))
-      
+      const result = await rpc.fundWallet(currentWallet, amount)
       await refreshBalance()
-      return address
+      return result
     } catch (error) {
       console.error('Failed to fund wallet:', error)
-      toast.error('Failed to fund wallet')
       return null
     } finally {
       setLoading(false)
@@ -156,16 +154,16 @@ export function BitcoinProvider({ children }) {
 
   const value = {
     rpc,
-    walletService,
     currentWallet,
     balance,
     loading,
     connected,
+    walletInfo,
     refreshBalance,
     generateAddress,
     sendTransaction,
-    getTransactionHistory,
     fundWallet,
+    isConnected: connected,
   }
 
   return (
