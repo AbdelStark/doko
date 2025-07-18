@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Doko WASM Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .result {
+            background-color: #f0f0f0;
+            padding: 10px;
+            border-radius: 3px;
+            margin: 5px 0;
+        }
+        .error {
+            background-color: #ffeeee;
+            color: #cc0000;
+        }
+        .success {
+            background-color: #eeffee;
+            color: #006600;
+        }
+    </style>
+</head>
+<body>
+    <h1>Doko WASM Test</h1>
+    
+    <div class="test-section">
+        <h2>WASM Module Loading</h2>
+        <div id="loading">Loading WASM module...</div>
+    </div>
+
+    <div class="test-section">
+        <h2>Utility Functions</h2>
+        <div id="utility-tests"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>Prediction Market</h2>
+        <div id="market-tests"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>Market Analytics</h2>
+        <div id="analytics-tests"></div>
+    </div>
+
+    <script type="module">
+        import init, { 
+            main, 
+            generate_market_id, 
+            sha256_hash, 
+            validate_address, 
+            satoshi_to_btc, 
+            btc_to_satoshi, 
+            verify_signature,
+            WasmPredictionMarket,
+            WasmBet,
+            MarketAnalytics 
+        } from './pkg/doko_wasm.js';
+
+        async function runTests() {
+            try {
+                // Initialize WASM module
+                await init();
+                main();
+                document.getElementById('loading').innerHTML = '<div class="result success">✓ WASM module loaded successfully</div>';
+
+                // Test utility functions
+                const utilityDiv = document.getElementById('utility-tests');
+                let utilityResults = '';
+
+                // Test market ID generation
+                const marketId = generate_market_id();
+                utilityResults += `<div class="result">Market ID: ${marketId}</div>`;
+
+                // Test SHA256 hash
+                const hash = sha256_hash("Hello, World!");
+                utilityResults += `<div class="result">SHA256 Hash: ${hash}</div>`;
+
+                // Test Bitcoin address validation
+                const isValid = validate_address("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4", 0);
+                utilityResults += `<div class="result">Address valid: ${isValid}</div>`;
+
+                // Test satoshi/BTC conversion
+                const btcAmount = satoshi_to_btc(BigInt(100000000));
+                const satAmount = btc_to_satoshi(1.0);
+                utilityResults += `<div class="result">100M sats = ${btcAmount} BTC</div>`;
+                utilityResults += `<div class="result">1 BTC = ${satAmount} sats</div>`;
+
+                // Test signature verification (placeholder)
+                const sigValid = verify_signature(
+                    "test message",
+                    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                );
+                utilityResults += `<div class="result">Signature valid: ${sigValid}</div>`;
+
+                utilityDiv.innerHTML = utilityResults;
+
+                // Test prediction market
+                const marketDiv = document.getElementById('market-tests');
+                let marketResults = '';
+
+                const market = new WasmPredictionMarket(
+                    "TEST1234",
+                    "Who will win the 2024 election?",
+                    "Candidate A",
+                    "Candidate B",
+                    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                    BigInt(Math.floor(Date.now() / 1000) + 86400), // 24 hours from now
+                    2 // Signet
+                );
+
+                marketResults += `<div class="result">Market ID: ${market.market_id}</div>`;
+                marketResults += `<div class="result">Question: ${market.question}</div>`;
+                marketResults += `<div class="result">Outcome A: ${market.outcome_a}</div>`;
+                marketResults += `<div class="result">Outcome B: ${market.outcome_b}</div>`;
+                marketResults += `<div class="result">Oracle PubKey: ${market.oracle_pubkey}</div>`;
+                marketResults += `<div class="result">Settlement Time: ${market.settlement_timestamp}</div>`;
+                marketResults += `<div class="result">Network: ${market.network}</div>`;
+                marketResults += `<div class="result">Total Amount: ${market.total_amount}</div>`;
+                marketResults += `<div class="result">Settled: ${market.settled}</div>`;
+
+                // Test odds calculation
+                const oddsA = market.get_odds_a(BigInt(100000), BigInt(200000));
+                const oddsB = market.get_odds_b(BigInt(100000), BigInt(200000));
+                marketResults += `<div class="result">Odds A: ${oddsA}%</div>`;
+                marketResults += `<div class="result">Odds B: ${oddsB}%</div>`;
+
+                // Test payout calculation
+                const payout = market.calculate_payout(BigInt(50000), BigInt(100000), BigInt(300000));
+                marketResults += `<div class="result">Payout for 50k bet: ${payout} sats</div>`;
+
+                // Test multiplier calculation
+                const multiplier = market.calculate_multiplier(BigInt(100000), BigInt(300000));
+                marketResults += `<div class="result">Multiplier: ${multiplier}x</div>`;
+
+                // Test outcome message generation
+                const outcomeMessage = market.generate_outcome_message("A");
+                marketResults += `<div class="result">Outcome Message: ${outcomeMessage}</div>`;
+
+                marketDiv.innerHTML = marketResults;
+
+                // Test market analytics
+                const analyticsDiv = document.getElementById('analytics-tests');
+                let analyticsResults = '';
+
+                const analytics = new MarketAnalytics();
+                analytics.add_bet("A", BigInt(100000));
+                analytics.add_bet("B", BigInt(200000));
+                analytics.add_bet("A", BigInt(50000));
+
+                analyticsResults += `<div class="result">Total Bets: ${analytics.total_bets}</div>`;
+                analyticsResults += `<div class="result">Total Volume: ${analytics.total_volume}</div>`;
+                analyticsResults += `<div class="result">Outcome A Volume: ${analytics.outcome_a_volume}</div>`;
+                analyticsResults += `<div class="result">Outcome B Volume: ${analytics.outcome_b_volume}</div>`;
+                analyticsResults += `<div class="result">Odds A: ${analytics.get_odds_a()}%</div>`;
+                analyticsResults += `<div class="result">Odds B: ${analytics.get_odds_b()}%</div>`;
+                analyticsResults += `<div class="result">Implied Probability A: ${analytics.get_implied_probability_a()}</div>`;
+                analyticsResults += `<div class="result">Implied Probability B: ${analytics.get_implied_probability_b()}</div>`;
+                analyticsResults += `<div class="result">Market Efficiency: ${analytics.get_market_efficiency()}%</div>`;
+
+                analyticsDiv.innerHTML = analyticsResults;
+
+                // Test WasmBet
+                const bet = new WasmBet(
+                    "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4",
+                    BigInt(100000),
+                    "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+                    0
+                );
+
+                analyticsResults += `<div class="result">Bet Address: ${bet.payout_address}</div>`;
+                analyticsResults += `<div class="result">Bet Amount: ${bet.amount}</div>`;
+                analyticsResults += `<div class="result">Bet TxID: ${bet.txid}</div>`;
+                analyticsResults += `<div class="result">Bet VOut: ${bet.vout}</div>`;
+
+                analyticsDiv.innerHTML = analyticsResults;
+
+            } catch (error) {
+                console.error('Error running tests:', error);
+                document.getElementById('loading').innerHTML = '<div class="result error">✗ Error loading WASM module: ' + error.message + '</div>';
+            }
+        }
+
+        runTests();
+    </script>
+</body>
+</html>

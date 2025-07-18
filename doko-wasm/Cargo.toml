@@ -1,0 +1,49 @@
+[package]
+name = "doko-wasm"
+version = "0.1.0"
+edition = "2021"
+authors = ["@AbdelStark"]
+description = "WASM bindings for Doko Bitcoin prediction markets and vaults"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Core Bitcoin functionality (with WASM-compatible features)
+bitcoin = { version = "0.32", default-features = false }
+sha2 = "0.10"
+hex = "0.4"
+
+# Nostr functionality (WASM-compatible) - disabled for now due to compilation issues
+# nostr = { version = "0.39.0", default-features = false }
+
+# WASM bindings
+wasm-bindgen = { version = "0.2", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+js-sys = { version = "0.3", optional = true }
+web-sys = { version = "0.3", optional = true }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["alloc"] }
+serde-wasm-bindgen = "0.6"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "2.0"
+
+# Utilities
+chrono = { version = "0.4", default-features = false, features = ["clock", "wasm-bindgen"] }
+rand = { version = "0.8", features = ["small_rng"] }
+console_error_panic_hook = "0.1"
+wee_alloc = { version = "0.4", optional = true }
+
+[dependencies.getrandom]
+version = "0.2"
+features = ["js"]
+
+[features]
+default = ["wasm"]
+wasm = ["wasm-bindgen", "wasm-bindgen-futures", "js-sys", "web-sys"]
+wee_alloc = ["dep:wee_alloc"]
